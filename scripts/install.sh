@@ -176,10 +176,12 @@ else
     # ---------------------------------------------------------------------------
     step "Downloading release asset"
 
-    # goreleaser archive 命名格式: deepx_vX.Y.Z_<os>_<arch>.tar.gz (windows 用 .zip)
+    # goreleaser v2 的 {{.Version}} 不含 v 前缀,产物名 e.g. deepx_0.1.0_darwin_arm64.tar.gz
+    # URL 路径里的 tag 仍保留 v 前缀。
+    VERSION_NO_V="${VERSION#v}"
     EXT="tar.gz"
     [ "$OS" = "windows" ] && EXT="zip"
-    ASSET="${REPO}_${VERSION}_${OS}_${ARCH}.${EXT}"
+    ASSET="${REPO}_${VERSION_NO_V}_${OS}_${ARCH}.${EXT}"
     URL="https://github.com/${OWNER}/${REPO}/releases/download/${VERSION}/${ASSET}"
 
     TMPDIR=$(mktemp -d)

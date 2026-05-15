@@ -139,7 +139,10 @@ else {
     # ---------------------------------------------------------------------------
     Write-Step "Downloading release asset"
 
-    $asset = "${Repo}_${Version}_windows_${Arch}.zip"
+    # goreleaser v2 的 {{.Version}} 不含 v 前缀,产物名 e.g. deepx_0.1.0_windows_amd64.zip
+    # URL 路径里的 tag 仍保留 v 前缀。
+    $versionNoV = $Version -replace '^v', ''
+    $asset = "${Repo}_${versionNoV}_windows_${Arch}.zip"
     $url   = "https://github.com/$Owner/$Repo/releases/download/$Version/$asset"
     $tmp   = New-Item -ItemType Directory -Path (Join-Path $env:TEMP "deepx-install-$([guid]::NewGuid().ToString('N'))") -Force
     $zipPath = Join-Path $tmp $asset

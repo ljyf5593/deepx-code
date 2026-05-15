@@ -39,7 +39,7 @@ builds:
 archives:
   - id: default
     formats: [tar.gz]
-    # 例: deepx_v0.1.0_darwin_arm64.tar.gz
+    # 例: deepx_0.1.0_darwin_arm64.tar.gz (注意 .Version 不带 v 前缀,与 .Tag 不同)
     name_template: >-
       {{ .ProjectName }}_{{ .Version }}_
       {{- if eq .Os "darwin" }}darwin
