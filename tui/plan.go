@@ -69,6 +69,20 @@ func renderPlanSummary(p *planState, _ int) []string {
 	return []string{fmt.Sprintf("%d/%d done", done, total)}
 }
 
+// planModelTag 渲染一个 plan 节点的 model 标签,显示在 title 后。
+//   - "pro"   → 高亮色,提醒用户这一步用了贵模型
+//   - "flash" → 暗色,弱化展示,信息完整但不抢眼
+//   - 空 / 其他 → 不渲染(老数据 / 模型瞎填,降级到无 tag)
+func planModelTag(model string) string {
+	switch strings.ToLower(strings.TrimSpace(model)) {
+	case "pro":
+		return lipgloss.NewStyle().Foreground(accentColor).Render("[pro]")
+	case "flash":
+		return lipgloss.NewStyle().Foreground(dimColor).Render("[flash]")
+	}
+	return ""
+}
+
 // renderPlanForChat 把 plan 列表渲染成 chat 区使用的字符串(多行)。
 // 每次都用当前 planState 的实际状态(checkbox 反映 done / running / pending),
 // refreshViewport 每次 tick / token / TaskStatusMsg 都重新渲染一遍,实现 live overlay。
@@ -87,6 +101,10 @@ func renderPlanForChat(p *planState) string {
 		sb.WriteString(planStatusBox(pl.Status))
 		sb.WriteString(" ")
 		sb.WriteString(pl.Title)
+		if tag := planModelTag(pl.Model); tag != "" {
+			sb.WriteString(" ")
+			sb.WriteString(tag)
+		}
 		if len(pl.DependsOn) > 0 && pl.Status == agent.PlanStatusPending {
 			sb.WriteString(dim("  (deps: " + strings.Join(pl.DependsOn, ",") + ")"))
 		}

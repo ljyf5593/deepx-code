@@ -359,6 +359,7 @@ var Tools = []Tool{
 		Name: "CreatePlan",
 		Description: "把复杂任务拆解成可并发执行的 DAG。\n\n" +
 			"**何时调用**:\n" +
+			"- **用户明确要求『规划 / 列出步骤 / 列待办 / 先 plan / 必须先规划』等意图时,第一步必须调用本工具**\n" +
 			"- 任务含 2+ 个独立步骤 / 跨多个文件 / 需要先调研再修改\n" +
 			"- 简单任务(读单文件 / 一行替换 / 直接答事实)不要硬拆,直接答更高效\n\n" +
 			"**每个节点 model 字段选择**:\n" +
@@ -371,7 +372,7 @@ var Tools = []Tool{
 			"plan3: 读文件 C    (flash)  ┘\n" +
 			"plan4: 综合分析     (pro)    ← depends_on=[plan1,plan2,plan3]\n" +
 			"```\n" +
-			"无依赖时**不要写 depends_on**(允许 deepx 并发跑兄弟节点)。\n\n" +
+			"无依赖时**不要写 depends_on**(允许 deepx 并发跑节点)。\n\n" +
 			"**执行 & 返回值**:deepx 按 DAG 依赖关系并发执行所有节点,返回每个节点的执行汇总(每行一个节点 + 状态 + 简短结果)。拿到汇总后只需给用户写一段简洁的最终总结,不要再做实际工作(状态由 deepx 自维护)。",
 		Parameters: ToolParam{
 			Type: "object",
