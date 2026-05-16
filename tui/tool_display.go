@@ -36,14 +36,18 @@ var toolIcons = map[string]string{
 
 const defaultToolIcon = "🔧"
 
-// formatToolCallLine 把一次工具调用渲染成单行紧凑显示。
-// 格式: "<icon> <ToolName> (<主要参数>)"
-// 主要参数按工具类型选取:文件路径优先, 否则 pattern/command 摘要。
-// 截断阈值 80 字符,避免长 prompt/正则把整行撑爆。
+// formatToolCallLine 把一次工具调用渲染成紧凑展示。
+// 常规工具:单行 "<icon> <ToolName> (<主要参数>)"。
+// Update 工具:首行带路径,后接 ~~~diff 代码块,old_string 标 `-`、new_string 标 `+`,
+// 形成类似 git diff 的 patch 预览。
+// 单行参数截断阈值 80 字符,避免长 prompt/正则把整行撑爆。
 func formatToolCallLine(name, argsJSON string) string {
 	icon, ok := toolIcons[name]
 	if !ok {
 		icon = defaultToolIcon
+	}
+	if name == "Update" {
+		return formatUpdatePreview(icon, argsJSON)
 	}
 	arg := extractMainArg(name, argsJSON)
 	// icon 是 emoji(2 cell),显式加 1 空格分隔 ToolName,避免 emoji 紧贴字母在
@@ -55,6 +59,83 @@ func formatToolCallLine(name, argsJSON string) string {
 		arg = arg[:77] + "..."
 	}
 	return icon + " " + name + " (" + arg + ")"
+}
+
+// formatUpdatePreview 把 Update 工具的 path / old_string / new_string 渲染成 patch 预览。
+//
+// 输出形如:
+//
+//	📝 Update (path/to/file)
+//
+//	~~~diff
+//	- old line 1
+//	- old line 2
+//	+ new line 1
+//	+ new line 2
+//	~~~
+//
+// 用 ~~~ 而不是 ``` 包裹,避免 old/new 内容里含 ``` 撑爆 fence。
+// 长 / 多行的 old/new 各自截断到 updatePreviewMaxLines 行,行宽超过 updatePreviewMaxWidth
+// 时尾部截断 + "...";剩余行数追加 "... (N more lines)" 提示。
+// args 解析失败时退化为 "📝 Update" 单行,不抛错。
+func formatUpdatePreview(icon, argsJSON string) string {
+	header := icon + " Update"
+	if argsJSON == "" || argsJSON == "null" {
+		return header
+	}
+	var args map[string]any
+	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+		return header
+	}
+	if path := strVal(args["path"]); path != "" {
+		header += " (" + path + ")"
+	}
+	oldS, _ := args["old_string"].(string)
+	newS, _ := args["new_string"].(string)
+	if oldS == "" && newS == "" {
+		return header
+	}
+	var sb strings.Builder
+	sb.WriteString(header)
+	// 空行 + ~~~diff:markdown 块边界,glamour 会按 diff 语法上色(- 红 / + 绿)
+	sb.WriteString("\n\n~~~diff\n")
+	writeDiffBlock(&sb, oldS, "- ")
+	writeDiffBlock(&sb, newS, "+ ")
+	sb.WriteString("~~~")
+	return sb.String()
+}
+
+const (
+	updatePreviewMaxLines = 5
+	updatePreviewMaxWidth = 100
+)
+
+// writeDiffBlock 把单段文本(old_string 或 new_string)按行拆分,每行加 prefix 后写入 sb。
+// 超过 updatePreviewMaxLines 行只保留头部 N 行,末尾追加 "... (M more lines)";
+// 单行长度超过 updatePreviewMaxWidth 字节时尾部截断为 "..."。
+// 空串直接返回(调用方已在 oldS && newS 全空时短路)。
+func writeDiffBlock(sb *strings.Builder, s, prefix string) {
+	if s == "" {
+		return
+	}
+	lines := strings.Split(s, "\n")
+	total := len(lines)
+	if total > updatePreviewMaxLines {
+		lines = lines[:updatePreviewMaxLines]
+	}
+	for _, l := range lines {
+		if len(l) > updatePreviewMaxWidth {
+			l = l[:updatePreviewMaxWidth-3] + "..."
+		}
+		sb.WriteString(prefix)
+		sb.WriteString(l)
+		sb.WriteByte('\n')
+	}
+	if total > updatePreviewMaxLines {
+		sb.WriteString("... (")
+		sb.WriteString(itoa(total - updatePreviewMaxLines))
+		sb.WriteString(" more lines)\n")
+	}
 }
 
 // extractMainArg 从 LLM 给的 args JSON 里抽取一个最具代表性的字段值,显示到行尾括号里。
