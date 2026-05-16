@@ -17,7 +17,7 @@ type Tool struct {
 	Executor    func(args map[string]any) ToolResult `json:"-"`
 	ReadOnly    bool                                 `json:"-"`
 	// Roles 限制本工具可见的模型角色。空 = 任何角色可见。
-	// 例如 update_task_status 只对 subagent 可见,主对话不需要。
+	// 例如 UpdateTaskStatus 只对 subagent 可见,主对话不需要。
 	Roles []string `json:"-"`
 }
 
@@ -191,7 +191,7 @@ var Tools = []Tool{
 		ReadOnly: true,
 	},
 	{
-		Name: "Command",
+		Name: "Bash",
 		Description: "在 shell 中执行命令并返回 stdout/stderr。可指定 cwd 与超时秒数(默认 60)。" +
 			"\n\n**不要用本工具启动长时间运行的进程**(开发服务器 / 守护进程 / 无限监视器),例如:" +
 			"\n  - npm run dev / vite / pnpm dev / yarn start" +
@@ -324,9 +324,9 @@ var Tools = []Tool{
 		ReadOnly: true, // 仅读取本地图片,不修改任何东西
 	},
 	{
-		Name: "switch_model",
+		Name: "SwitchModel",
 		Description: "把当前对话切到 pro 模型(更强但更贵)。单向升级,升完本轮剩余都用 pro;下一轮 user 输入重新走 keyword router 决定起手。\n\n" +
-			"**何时调用 switch_model(满足任一条件)**:\n" +
+			"**何时调用 SwitchModel(满足任一条件)**:\n" +
 			"1. 需要复杂推理 / 长链路因果分析\n" +
 			"2. 需要长链路规划(多步分解、跨阶段决策)\n" +
 			"3. 需要生成大型代码块(>100 行 / 跨多文件)\n" +
@@ -356,7 +356,7 @@ var Tools = []Tool{
 		// Roles 留空 = 所有角色可见。pro 调用时拦截层会 no-op。
 	},
 	{
-		Name: "create_plan",
+		Name: "CreatePlan",
 		Description: "把复杂任务拆解成可并发执行的 DAG。\n\n" +
 			"**何时调用**:\n" +
 			"- 任务含 2+ 个独立步骤 / 跨多个文件 / 需要先调研再修改\n" +
@@ -372,7 +372,7 @@ var Tools = []Tool{
 			"plan4: 综合分析     (pro)    ← depends_on=[plan1,plan2,plan3]\n" +
 			"```\n" +
 			"无依赖时**不要写 depends_on**(允许 deepx 并发跑兄弟节点)。\n\n" +
-			"**执行 & 返回值**:deepx 自动为每个节点起子 agent,按 DAG 依赖关系并发执行。本工具返回所有节点的执行汇总(每行一个节点 + 状态 + 简短结果)。拿到汇总后只需给用户写一段简洁的最终总结 — **不要再做实际工作,也不要再调 update_task_status**(状态由 deepx 自维护)。",
+			"**执行 & 返回值**:deepx 自动为每个节点起子 agent,按 DAG 依赖关系并发执行。本工具返回所有节点的执行汇总(每行一个节点 + 状态 + 简短结果)。拿到汇总后只需给用户写一段简洁的最终总结 — **不要再做实际工作,也不要再调 UpdateTaskStatus**(状态由 deepx 自维护)。",
 		Parameters: ToolParam{
 			Type: "object",
 			Properties: map[string]PropDef{
@@ -400,7 +400,7 @@ var Tools = []Tool{
 		// flash 起手时也允许它把复杂任务拆成 DAG(其中可指定 pro 节点跑深度部分)。
 	},
 	{
-		Name: "update_task_status",
+		Name: "UpdateTaskStatus",
 		Description: "更新某个 plan 节点的执行状态。每开始一个 plan 前调用一次(status=running),完成或失败时再调一次(status=done/failed)。summary 是可选的一段简短结论。" +
 			"deepx 用这些状态实时驱动右栏 Current Plan 区的显示。",
 		Parameters: ToolParam{
@@ -414,7 +414,7 @@ var Tools = []Tool{
 		},
 		Executor: UpdateTaskStatus,
 		ReadOnly: true,
-		// 只对子 agent 暴露。主对话里的 pro 在调用 create_plan 后 DAG 自动驱动状态,
+		// 只对子 agent 暴露。主对话里的 pro 在调用 CreatePlan 后 DAG 自动驱动状态,
 		// 不需要 pro 显式更新;子 agent 偶尔需要写中间状态(实际被吞,以 scheduler 为准)。
 		Roles: []string{RoleSubAgent},
 	},

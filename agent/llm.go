@@ -20,7 +20,7 @@ const (
 	AgentMode_Auto AgentMode = "auto"
 
 	// 主 agent 单轮对话内的工具调用上限。
-	// 100 轮给复杂多步任务留足空间(典型场景:create_plan 之后还要做修改 + 测试 + 修复循环)。
+	// 100 轮给复杂多步任务留足空间(典型场景:CreatePlan 之后还要做修改 + 测试 + 修复循环)。
 	// 触顶通常意味着 LLM 在死循环,会返回错误中断。
 	mainAgentMaxRounds = 100
 )
@@ -162,7 +162,7 @@ type sseChunk struct {
 // === 入口 ===
 
 // StartStream 启动一个对话回合。入口由 RouteByKeyword 决定起手模型(flash/pro),
-// 本轮锁定该模型不再切换。复杂任务由模型主动调 create_plan 拆分,plan 节点的 model 字段
+// 本轮锁定该模型不再切换。复杂任务由模型主动调 CreatePlan 拆分,plan 节点的 model 字段
 // 由 sub-agent 按需路由,实现细粒度的模型选择。
 func StartStream(
 	models ModelConfig,
@@ -188,7 +188,7 @@ func StartStream(
 		}
 		if workspace != "" {
 			// 在首轮注入 system 提示:当前工作目录 + 任务拆解 + plan 节点的 model 选择指南。
-			// 入口模型已经由 keyword router 决定(flash 或 pro);模型自行判断要不要 create_plan 拆任务。
+			// 入口模型已经由 keyword router 决定(flash 或 pro);模型自行判断要不要 CreatePlan 拆任务。
 			if len(convo) == 0 || convo[0].Role != "system" {
 				// system prompt 只放跨工具的行为规约 — 触发条件 / 调用语法 / 拆分模式等
 				// 每个工具自己的 description 已经覆盖,这里不重复,避免每轮浪费 token。
@@ -291,16 +291,16 @@ func StartStream(
 
 			// 执行每个工具调用,把结果加进 convo。
 			// 三个工具被 deepx 拦截 (不走 Executor):
-			//   - create_plan         → 解析后产 PlanCreatedMsg,触发 DAG 调度
-			//   - update_task_status  → 解析后产 TaskStatusMsg,UI 更新单项状态
-			//   - switch_model        → 改本轮 currentEntry / role,通过 ModelSwitchMsg 通知 UI
+			//   - CreatePlan         → 解析后产 PlanCreatedMsg,触发 DAG 调度
+			//   - UpdateTaskStatus   → 解析后产 TaskStatusMsg,UI 更新单项状态
+			//   - SwitchModel        → 改本轮 currentEntry / role,通过 ModelSwitchMsg 通知 UI
 			// 拦截后仍要给 LLM 一个 fake tool result,让 OpenAI 工具循环能正常推进。
 			for _, tc := range toolCalls {
 				ch <- ToolCallStartMsg{Name: tc.Function.Name, Args: tc.Function.Arguments}
 
 				var result tools.ToolResult
 				switch tc.Function.Name {
-				case "create_plan":
+				case "CreatePlan":
 					plans, perr := parseCreatePlanArgs(tc.Function.Arguments)
 					if perr != nil {
 						result = tools.ToolResult{Output: perr.Error(), Success: false}
@@ -350,7 +350,7 @@ func StartStream(
 							Success: successCount > 0,
 						}
 					}
-				case "update_task_status":
+				case "UpdateTaskStatus":
 					id, st, summary, perr := parseUpdateTaskStatusArgs(tc.Function.Arguments)
 					if perr != nil {
 						result = tools.ToolResult{Output: perr.Error(), Success: false}
@@ -361,7 +361,7 @@ func StartStream(
 							Success: true,
 						}
 					}
-				case "switch_model":
+				case "SwitchModel":
 					// 单向升级到 pro。已经在 pro 是 no-op,flash → pro 实际换 currentEntry。
 					// 切换立即生效:本轮工具循环下一次 streamOnce 用新 entry。
 					reason := parseSwitchModelReason(tc.Function.Arguments)

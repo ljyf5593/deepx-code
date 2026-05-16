@@ -30,7 +30,7 @@ const (
 // === 工具入口 ===
 
 // WebFetch 拉取单个 URL 的内容,HTML 自动转纯文本(去 script/style/nav,抽 main/article)。
-// 比让 LLM 自己用 Command 跑 curl + sed pipeline 更省 token、更可靠。
+// 比让 LLM 自己用 Bash 跑 curl + sed pipeline 更省 token、更可靠。
 func WebFetch(args map[string]any) ToolResult {
 	rawURL, _ := args["url"].(string)
 	rawURL = strings.TrimSpace(rawURL)

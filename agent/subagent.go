@@ -36,14 +36,14 @@ const subAgentMaxRounds = 50
 //
 // 行为:
 //   - 独立 history,只含 system prompt + 用户原始任务 + 节点 title
-//   - 工具白名单按 RoleSubAgent 过滤 (看不到 create_plan,避免递归 plan)
-//   - update_task_status 调用被吞掉,scheduler 才是状态真实来源
+//   - 工具白名单按 RoleSubAgent 过滤 (看不到 CreatePlan,避免递归 plan)
+//   - UpdateTaskStatus 调用被吞掉,scheduler 才是状态真实来源
 //   - 不向 TUI 发 TokenMsg / ToolCallStartMsg 等可见事件,子 agent 中间过程完全隐藏
 //   - 最终 assistant content 作为 Summary 返回;失败 → Err
 func runSubAgent(in subAgentInput) subAgentResult {
 	// 构造系统提示。子 agent 看到的上下文就这几行,简短紧凑。
 	var sb strings.Builder
-	sb.WriteString("你是 deepx 中的子 agent,只负责完成一个被分派的 plan 项,不要再 switch_model、也不要 create_plan。\n")
+	sb.WriteString("你是 deepx 中的子 agent,只负责完成一个被分派的 plan 项,不要再 SwitchModel、也不要 CreatePlan。\n")
 	sb.WriteString("工作目录: ")
 	sb.WriteString(in.Workspace)
 	sb.WriteString("\n用户的原始任务背景: ")
@@ -113,7 +113,7 @@ func runSubAgent(in subAgentInput) subAgentResult {
 		for _, tc := range toolCalls {
 			var result tools.ToolResult
 			switch tc.Function.Name {
-			case "update_task_status":
+			case "UpdateTaskStatus":
 				// 子 agent 想自报状态,吞掉给 OK。scheduler 才是状态来源。
 				result = tools.ToolResult{Output: "已记录", Success: true}
 			default:

@@ -68,8 +68,8 @@ type model struct {
 	// (b) 历史 ChatMessage 之后再次发回 API 时不带巨大的 base64。
 	attachedImagePaths []string
 
-	// 当前活跃规划。nil = 无规划。pro 调用 create_plan 时初始化,
-	// update_task_status 通过 TaskStatusMsg 增量更新。每次新用户消息发起前清空。
+	// 当前活跃规划。nil = 无规划。pro 调用 CreatePlan 时初始化,
+	// UpdateTaskStatus 通过 TaskStatusMsg 增量更新。每次新用户消息发起前清空。
 	plan *planState
 
 	// 鼠标 chat 矩形选区。selecting=true 表示左键在 chat 区按下后还没松开;
@@ -659,7 +659,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// 工具调用 = 一次"动作",紧凑单行展示:<icon> Name (主参数)
 		m.status = "tool"
 		line := formatToolCallLine(msg.Name, msg.Args)
-		m.chatContent.WriteString("\n" + line + "\n")
+		// 关键:tool 行前必须落到 markdown 的"段落起点"。CommonMark 单个 \n 是 soft break,
+		// glamour 渲染成空格 → "**🐋 deepx**: \n🐚 Bash ..." 就被拼回同一行。
+		// 按 chatContent 现有结尾决定补几个 \n:
+		//   - 已经以 \n 结尾(典型:上一次 tool 行写完):再补 1 个 → 凑成 \n\n 段落分隔
+		//   - 不以 \n 结尾(典型:首次工具调用紧跟 deepxPrefix,或 stream 完正文后再调工具):
+		//     补 2 个 → 强制段落分隔,避免被吸到上一行
+		existing := m.chatContent.String()
+		sep := "\n\n"
+		if strings.HasSuffix(existing, "\n") {
+			sep = "\n"
+		}
+		m.chatContent.WriteString(sep + line + "\n")
 		m.refreshViewport()
 		// 工具执行期间继续转 spinner,等结果回来后才可能切到 content
 		if !m.thinking {

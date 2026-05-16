@@ -8,29 +8,30 @@ import (
 // toolIcons 给每个工具一个 emoji 图标,统一 2 cell 显示宽。
 //
 // **规范**:
-//   - 所有 emoji 都按 emoji presentation 渲染(2 cell),不混搭 text presentation 字符
-//   - 对默认 text presentation 的 emoji 字符(✏ ⚙ 👁 ⬆ 🗂 等)显式加 VS16 (U+FE0F)
-//     强制 emoji presentation,让 ansi.StringWidth (grapheme) 跟终端实际渲染对齐
+//   - 只用 *默认 emoji presentation* 字符(U+1F300+ 段大多数都是),不用 VS16
+//   - VS16 (U+FE0F) 强制 emoji 形态在 macOS 系字体里没问题,但 Linux 终端 / tmux / SSH
+//     远程经常忽略 VS16,把 ✏ ⚙ 👁 ⬆ 🗂 等 text-presentation 默认字符渲染成 1 cell 文字
+//     字形,跟 lineDisplayWidth 强制 +1 的 2 cell 估算对不齐 → 行实宽 -1 → 滚动条左移抖动
 //   - 不加 trailing space — 拼接由 formatToolCallLine 在 icon 跟 name 之间显式加空格
 //
 // 表里没有的工具走 defaultToolIcon 兜底。
 var toolIcons = map[string]string{
-	"Read":               "📄",
-	"Write":              "📝",
-	"Update":             "✏️",
-	"List":               "📂",
-	"Tree":               "🌲",
-	"Glob":               "🔎",
-	"Grep":               "🔍",
-	"Command":            "⚙️",
-	"OCR":                "👁️",
-	"Search":             "🌐",
-	"Fetch":              "📡",
-	"Memory":             "🧠",
-	"LoadSkill":          "📜",
-	"create_plan":        "🗂️",
-	"update_task_status": "✅",
-	"switch_model":       "⬆️",
+	"Read":             "📄",
+	"Write":            "📝",
+	"Update":           "📝",
+	"List":             "📂",
+	"Tree":             "🌲",
+	"Glob":             "🔎",
+	"Grep":             "🔍",
+	"Bash":             "🐚",
+	"OCR":              "👀",
+	"Search":           "🌐",
+	"Fetch":            "📡",
+	"Memory":           "🧠",
+	"LoadSkill":        "📜",
+	"CreatePlan":       "📋",
+	"UpdateTaskStatus": "✅",
+	"SwitchModel":      "🚀",
 }
 
 const defaultToolIcon = "🔧"
@@ -101,17 +102,17 @@ func extractMainArg(name, argsJSON string) string {
 			return strings.Join(parts, " ")
 		}
 		return ""
-	case "Command":
+	case "Bash":
 		return strVal(args["command"])
-	case "switch_model":
+	case "SwitchModel":
 		return strVal(args["reason"])
-	case "update_task_status":
+	case "UpdateTaskStatus":
 		id, st := strVal(args["id"]), strVal(args["status"])
 		if id != "" && st != "" {
 			return id + " → " + st
 		}
 		return id
-	case "create_plan":
+	case "CreatePlan":
 		// plans 是数组,显示节点数
 		if p, ok := args["plans"].([]any); ok {
 			return countLabel(len(p), "node")
