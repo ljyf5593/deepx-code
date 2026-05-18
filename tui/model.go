@@ -215,6 +215,10 @@ func initialModel(models agent.ModelConfig, needsSetup bool) model {
 			m.chatContent.WriteString("---\n_(以上为历史对话,共 " +
 				strconv.Itoa(len(entries)) + " 条)_\n\n")
 		}
+		// 注入当前模式通知,让 LLM 明确知道初始模式(启动时恒为 auto)
+		msg := "[系统通知] 当前模式: auto,所有工具可用。"
+		m.history = append(m.history, agent.ChatMessage{Role: "assistant", Content: msg})
+		m.appendChat("assistant", msg)
 	}
 
 	// 首次启动:强制弹 modal,焦点在 setup 输入框
@@ -852,12 +856,13 @@ func (m *model) insertImagePlaceholder(n int) {
 // glamour 渲染时 **...** 会变粗体,emoji 给视觉锚点,跨终端比 ANSI 着色稳。
 // 未知 role 走兜底 "**role**: ",不会丢字。
 func rolePrefix(role string) string {
+	role = strings.ToLower(role)
 	switch role {
-	case "You":
+	case "you":
 		return userPrefix
-	case "System":
+	case "system":
 		return systemPrefix
-	case "deepx", "Assistant":
+	case "deepx", "assistant":
 		return deepxPrefix
 	default:
 		return "**" + role + "**: "
@@ -875,20 +880,24 @@ func (m *model) handleSlashCommand(input string) {
 	switch cmd {
 	case "/plan":
 		m.mode = agent.AgentMode_Plan
-		m.appendChat("System", "已切换到 plan 模式(仅只读工具:Read / List / Tree / Glob / Grep / Search / Fetch / Memory)")
+		msg := "[系统通知] 已切换到 plan 模式。Write / Update / Bash 已被禁用,只允许只读操作。请严格遵守。"
+		m.history = append(m.history, agent.ChatMessage{Role: "assistant", Content: msg})
+		m.appendChat("assistant", msg)
 	case "/auto":
 		m.mode = agent.AgentMode_Auto
-		m.appendChat("System", "已切换到 auto 模式(全部工具可用,包含 Write / Update / Bash 等)")
+		msg := "[系统通知] 已切换到 auto 模式。所有工具均可使用,包含 Write / Update / Bash。"
+		m.history = append(m.history, agent.ChatMessage{Role: "assistant", Content: msg})
+		m.appendChat("assistant", msg)
 	case "/mode":
-		m.appendChat("System", fmt.Sprintf("当前模式: %s", m.mode))
+		m.appendChat("assistant", fmt.Sprintf("当前模式: %s", m.mode))
 	case "/config":
 		m.openSetupModal()
 	case "/skills":
-		m.appendChat("System", m.skillsListMessage())
+		m.appendChat("assistant", m.skillsListMessage())
 	case "/help":
 		// 走 markdown 列表 — chatContent 经 glamour 渲染,缩进对齐文本会被当 code block 处理,
 		// `-` 项目符号更稳。每项格式: "`/cmd` — 说明"。
-		m.appendChat("System", "\n**Slash 命令**\n\n"+
+		m.appendChat("assistant", "\n**Slash 命令**\n\n"+
 			"- `/plan` — 切到只读模式(仅 Read / List / Grep / Glob / Tree / Search / Fetch / Memory)\n"+
 			"- `/auto` — 切回全工具模式(默认)\n"+
 			"- `/mode` — 显示当前模式\n"+
@@ -901,7 +910,7 @@ func (m *model) handleSlashCommand(input string) {
 			"- `Ctrl+V` — 粘贴(含图片)\n"+
 			"- `Ctrl+C` — 流式中中断当前回合;空闲时退出")
 	default:
-		m.appendChat("System", fmt.Sprintf("未知命令: %s (输入 /help 查看)", cmd))
+		m.appendChat("assistant", fmt.Sprintf("未知命令: %s (输入 /help 查看)", cmd))
 	}
 }
 

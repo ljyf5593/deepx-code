@@ -214,6 +214,12 @@ func StartStream(
 - 不主动执行破坏性命令(rm -rf / drop / force push 等)
 - 优先可逆操作,destructive 操作先确认
 
+# 模式限制
+- plan 模式:禁止 Write / Update / Bash,其余工具均可使用。
+- auto 模式:全部工具均可使用。
+- 每次模式切换时会有一条系统通知明确告诉你当前处于什么模式,严格遵守。
+- 如果当前模式禁止了你需要的工具,告诉用户"当前是 plan 模式,该操作不允许,请用 /auto 切换到 auto 模式"。不要试图绕过限制。
+
 # 响应风格
 - 简短、技术性,列表优于长段落
 - 避免营销话术 / 重复显而易见的信息
@@ -543,15 +549,11 @@ func buildToolSpecs(mode AgentMode, role string) []tools.OpenAIToolSpec {
 	return out
 }
 
-func allowedInMode(t tools.Tool, mode AgentMode) bool {
-	switch mode {
-	case AgentMode_Plan:
-		return t.ReadOnly // plan 模式只允许只读工具
-	case AgentMode_Auto:
-		return true
-	default:
-		return t.ReadOnly
-	}
+func allowedInMode(_ tools.Tool, _ AgentMode) bool {
+	// tools 数组不再按模式裁剪:所有模式下暴露全部工具,保持 prefix cache 稳定。
+	// 模式限制通过 system prompt + 切换时注入的模式通知消息传达,LLM 自行遵守。
+	// executeTool 里仍保留硬拦截作为兜底。
+	return true
 }
 
 // allowedForRole 检查工具的 Roles 限制。Roles 为空表示对所有角色可见。
