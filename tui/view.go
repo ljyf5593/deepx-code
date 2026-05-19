@@ -417,6 +417,7 @@ func (m model) rightPanelView() string {
 	rows = append(rows, section("Commands", []string{
 		label("/plan ") + " read-only",
 		label("/auto ") + " all tools",
+		label("/review ") + " review mode",
 		label("/help ") + " help",
 	})...)
 
