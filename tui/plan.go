@@ -112,8 +112,8 @@ func renderPlanForChat(p *planState) string {
 	var sb strings.Builder
 	dim := lipgloss.NewStyle().Foreground(dimColor).Render
 
-	sb.WriteString(lipgloss.NewStyle().Bold(true).Foreground(accentColor).Render("📋 Plan"))
-	sb.WriteString("\n")
+	// 不再渲染 "📋 Plan" 标题 —— 上方 CreatePlan tool 调用行已经标识了这是一个规划,
+	// 这里再来一个标题视觉冗余。直接出 checkbox 列表。
 	for _, pl := range p.items {
 		sb.WriteString("  ")
 		sb.WriteString(planStatusBox(pl.Status))
