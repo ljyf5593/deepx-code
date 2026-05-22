@@ -32,15 +32,20 @@ func (m model) wrapView(content string) tea.View {
 	return v
 }
 
-// inputAreaHeight 是底部输入框占用的固定行数。textarea 3 行 + 1 行顶部留白让输入区跟
-// 上方 chat 视觉分开。改这个值要同步 palette overlay 起点。
-const inputAreaHeight = 4
+// inputTopPad / inputBotPad 是输入区 textarea 上下的留白行数。顶部留 2 行把输入框跟上方
+// chat 拉开,底部不留白。改这俩值光标 / palette 起点会跟着 inputTopPad 自动对齐。
+const inputTopPad = 2
+const inputBotPad = 0
 
-// inputGutterWidth 是输入区左侧固定 gutter 列宽:首行画 "> ",其余行 "  "。
+// inputAreaHeight 是底部输入框占用的固定行数:textarea 3 行 + 上下留白。
+// textarea 高 = inputAreaHeight - inputTopPad - inputBotPad。
+const inputAreaHeight = 3 + inputTopPad + inputBotPad
+
+// inputGutterWidth 是输入区左侧固定 gutter 列宽:首行画 "❱ ",其余行 "  "。
 // textarea 实际宽度 = m.width - inputGutterWidth。
 const inputGutterWidth = 2
 
-// inputPromptStyle 是 gutter 里 "> " 的样式(粉紫加粗,同 banner 主色)。
+// inputPromptStyle 是 gutter 里 "❱ " 的样式(粉紫加粗,同 banner 主色)。
 var inputPromptStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("99")).Bold(true)
 
 // layout 计算 chat viewport 的宽度与高度。
@@ -142,12 +147,27 @@ func (m model) View() tea.View {
 	for i, tl := range taLines {
 		gutter := strings.Repeat(" ", inputGutterWidth)
 		if i == 0 {
-			gutter = inputPromptStyle.Render("> ")
+			gutter = inputPromptStyle.Render("❱ ")
 		}
 		inputRows[i] = gutter + tl
 	}
-	inpInner := strings.Join(inputRows, "\n")
-	inputBlock := strings.Repeat(" ", m.width) + "\n" + inpInner
+	// 输入区每行也带上竖分隔线:左侧 gutter+textarea 补齐到 leftW,接 │,右侧 rightW 留白。
+	// 这样分隔线从 body 一路画到屏幕底,底边跟输入框底对齐,视觉上是一条贯通的竖线。
+	rightPad := strings.Repeat(" ", rightW)
+	withDivider := func(left string) string {
+		return padLinesToWidth(left, leftW) + dividerChar + rightPad
+	}
+	inputLines := make([]string, 0, len(inputRows)+inputTopPad+inputBotPad)
+	for i := 0; i < inputTopPad; i++ {
+		inputLines = append(inputLines, withDivider("")) // 顶部留白行
+	}
+	for _, row := range inputRows {
+		inputLines = append(inputLines, withDivider(row))
+	}
+	for i := 0; i < inputBotPad; i++ {
+		inputLines = append(inputLines, withDivider("")) // 底部留白行
+	}
+	inputBlock := strings.Join(inputLines, "\n")
 
 	mainUI := lipgloss.JoinVertical(lipgloss.Left, body, inputBlock)
 
@@ -183,8 +203,8 @@ func (m model) View() tea.View {
 			idx = 0
 		}
 		palette := renderCommandPalette(matches, idx, leftW)
-		// 输入框首行 Y = body(bodyH) + 1 行顶部空白
-		inputY := bodyH + 1
+		// 输入框首行 Y = body(bodyH) + 顶部留白行数
+		inputY := bodyH + inputTopPad
 		startY := inputY - len(matches)
 		if startY < 0 {
 			startY = 0
@@ -205,14 +225,14 @@ func (m model) View() tea.View {
 	v := m.wrapView(normalizeFrame(mainUI, m.width, m.height))
 	// 真实终端光标定位到 input 内的 cursor 位置。
 	// textarea.Cursor() 给的 X/Y 是相对 textarea 自身的局部坐标;input 起始 Y =
-	// body 占的行数 + 1(上方空白行);X 要加上左侧 gutter 宽(textarea 现在从 gutter 右边起)。
+	// body 占的行数 + 顶部留白行数;X 要加上左侧 gutter 宽(textarea 现在从 gutter 右边起)。
 	// modal 打开时不显示真实光标 —— 避免光标卡在 modal 背后。
 	// cursorBlinkOff 由 cursorBlinkTickMsg 600ms 切一次:亮时塞 Cursor,灭时不塞 —
 	// 不依赖终端的 DECSCUSR blink 支持,VS Code 终端等也能闪。
 	if !m.showSetup && !m.showLangModal && !m.reviewPending && !m.cursorBlinkOff {
 		if c := m.input.Cursor(); c != nil {
 			c.Position.X += inputGutterWidth
-			c.Position.Y += bodyH + 1
+			c.Position.Y += bodyH + inputTopPad
 			v.Cursor = c
 		}
 	}

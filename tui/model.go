@@ -544,10 +544,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		leftW, vpH := m.layout()
 		m.chatViewport.SetWidth(leftW)
 		m.chatViewport.SetHeight(vpH)
-		// 输入区 = 左侧固定 gutter("> ")+ 右侧 textarea。textarea 只占 m.width-gutter,
+		// 输入区 = 左侧固定 gutter("> ")+ 右侧 textarea。textarea 只占 leftW-gutter,
+		// 跟上方 chat 同宽 —— 竖分隔线一路画到底,输入框落在分隔线左侧。
 		// gutter 由 view.go 单独画。不再用 textarea 自带 prompt,也不外套 lipgloss Width。
-		m.input.SetWidth(m.width - inputGutterWidth)
-		m.input.SetHeight(inputAreaHeight - 1)
+		m.input.SetWidth(leftW - inputGutterWidth)
+		m.input.SetHeight(inputAreaHeight - 2) // 减去上下各 1 行居中留白
 		// 窗口尺寸变了 → wrap 重算 → 老 line 号失效,必须清选区
 		m.selecting = false
 		m.refreshViewport()
