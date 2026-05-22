@@ -36,6 +36,13 @@ func (m model) wrapView(content string) tea.View {
 // 上方 chat 视觉分开。改这个值要同步 palette overlay 起点。
 const inputAreaHeight = 4
 
+// inputGutterWidth 是输入区左侧固定 gutter 列宽:首行画 "> ",其余行 "  "。
+// textarea 实际宽度 = m.width - inputGutterWidth。
+const inputGutterWidth = 2
+
+// inputPromptStyle 是 gutter 里 "> " 的样式(粉紫加粗,同 banner 主色)。
+var inputPromptStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("99")).Bold(true)
+
 // layout 计算 chat viewport 的宽度与高度。
 // 总体结构:
 //
@@ -115,13 +122,31 @@ func (m model) View() tea.View {
 	}
 	body := strings.Join(bodyLines, "\n")
 
-	// 输入区:无边框,顶部留 1 行空白跟 body 视觉分开。textarea 已经在 SetWidth(m.width)
-	// 内部把每行 pad 到 m.width 宽,不再额外套 lipgloss Width —— 双层 ANSI+padding
-	// 在 bubbletea cellbuf 里会让 CJK 宽字符的首字符位置错位被覆盖。
-	inpInner := m.input.View()
+	// 输入区 = 左侧固定 gutter + 右侧 textarea,逐行拼接。
+	// gutter 首行 "> "(粉紫),其余行 "  ";textarea 宽度已是 m.width-gutter。
+	// 这样多行粘贴 / 滚动时 "> " 始终钉在左上角,不会跟内容滚走。
+	taView := m.input.View()
+	taLines := strings.Split(taView, "\n")
 	if m.inputAllSelected {
-		inpInner = lipgloss.NewStyle().Reverse(true).Render(inpInner)
+		// 逐行 strip 成纯文本再套反色:textarea 输出里的内部 reset(\x1b[0m)会取消整段反色,
+		// 导致全选看不到高亮。只反色每行实际文字,空行 / 尾部空白不动。
+		for i, ln := range taLines {
+			plain := strings.TrimRight(ansi.Strip(ln), " ")
+			if plain == "" {
+				continue
+			}
+			taLines[i] = ansiReverseOn + plain + ansiReverseOff
+		}
 	}
+	inputRows := make([]string, len(taLines))
+	for i, tl := range taLines {
+		gutter := strings.Repeat(" ", inputGutterWidth)
+		if i == 0 {
+			gutter = inputPromptStyle.Render("> ")
+		}
+		inputRows[i] = gutter + tl
+	}
+	inpInner := strings.Join(inputRows, "\n")
 	inputBlock := strings.Repeat(" ", m.width) + "\n" + inpInner
 
 	mainUI := lipgloss.JoinVertical(lipgloss.Left, body, inputBlock)
@@ -180,12 +205,13 @@ func (m model) View() tea.View {
 	v := m.wrapView(normalizeFrame(mainUI, m.width, m.height))
 	// 真实终端光标定位到 input 内的 cursor 位置。
 	// textarea.Cursor() 给的 X/Y 是相对 textarea 自身的局部坐标;input 起始 Y =
-	// body 占的行数 + 1(上方空白行),X 不偏移(textarea 占满 m.width,从左边起)。
+	// body 占的行数 + 1(上方空白行);X 要加上左侧 gutter 宽(textarea 现在从 gutter 右边起)。
 	// modal 打开时不显示真实光标 —— 避免光标卡在 modal 背后。
 	// cursorBlinkOff 由 cursorBlinkTickMsg 600ms 切一次:亮时塞 Cursor,灭时不塞 —
 	// 不依赖终端的 DECSCUSR blink 支持,VS Code 终端等也能闪。
 	if !m.showSetup && !m.showLangModal && !m.reviewPending && !m.cursorBlinkOff {
 		if c := m.input.Cursor(); c != nil {
+			c.Position.X += inputGutterWidth
 			c.Position.Y += bodyH + 1
 			v.Cursor = c
 		}

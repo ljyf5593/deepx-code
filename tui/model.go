@@ -106,6 +106,10 @@ type model struct {
 	// bubbletea v2 的 MouseClickMsg 不带 Clicks 计数,只能自己算。
 	lastInputClickAt time.Time
 
+	// inputDragging 表示左键在输入框区域按下后还没松开,用来实现"输入框拖拽全选":
+	// 拖动中 → inputAllSelected=true 高亮整段;松手 → 复制输入框内容到剪贴板。
+	inputDragging bool
+
 	// copyHint 复制成功后的临时提示("✓ 已复制"),叠在鼠标松开的位置 (copyHintX/Y),
 	// 1.5s 后由 copyHintClearMsg 清空。空串 = 不显示。
 	copyHint  string
@@ -209,9 +213,6 @@ func initialModel(models agent.ModelConfig, needsSetup bool, version string, hub
 	//   - Prompt 染粉紫(同 banner 主色),focus / blur 状态都保留亮度
 	//   - 内置 CursorLine 高亮(默认会给当前行加背景色)关掉,跟 chat 区无 chrome 风格一致
 	tas := ti.Styles()
-	promptStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("99")).Bold(true)
-	tas.Focused.Prompt = promptStyle
-	tas.Blurred.Prompt = promptStyle
 	tas.Focused.CursorLine = lipgloss.NewStyle()
 	tas.Blurred.CursorLine = lipgloss.NewStyle()
 	tas.Focused.Base = lipgloss.NewStyle()
@@ -229,14 +230,9 @@ func initialModel(models agent.ModelConfig, needsSetup bool, version string, hub
 	// 表现为首字符不显示。改用真实终端光标(由 tui/view.go wrapView 里 v.Cursor 注入),
 	// 真实光标只是终端的位置 + 形状指令,完全不参与正文字符渲染。
 	ti.SetVirtualCursor(false)
-	// 只在第 0 行画 "> ",其它行用 2 空格保持光标列对齐 — promptWidth 必须 = 2 才能让
-	// textarea 内部把光标列正确算到 prompt 之后。
-	ti.SetPromptFunc(2, func(info textarea.PromptInfo) string {
-		if info.LineNumber == 0 {
-			return "> "
-		}
-		return "  "
-	})
+	// 不用 textarea 自带 prompt:"> " 由 tui/view.go 作为固定左侧 gutter 单独画(见 inputGutterWidth)。
+	// 这样多行粘贴 / 滚动时 "> " 始终钉在输入框左上角,不会跟着内容滚走。
+	ti.Prompt = ""
 
 	si := textinput.New()
 	si.Placeholder = "sk-..."
@@ -548,10 +544,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		leftW, vpH := m.layout()
 		m.chatViewport.SetWidth(leftW)
 		m.chatViewport.SetHeight(vpH)
-		// textarea 自己包了 prompt 列宽,SetWidth 是整体外宽,直接给 m.width(全宽)
-		// —— 不再让外层 lipgloss 再包一层 Width,双层 padding+ANSI 在 bubbletea cellbuf
-		// 里会让 CJK 宽字符的格子位置算错,首字符被后续帧覆盖成空(用户报"输入第一个汉字看不见")。
-		m.input.SetWidth(m.width)
+		// 输入区 = 左侧固定 gutter("> ")+ 右侧 textarea。textarea 只占 m.width-gutter,
+		// gutter 由 view.go 单独画。不再用 textarea 自带 prompt,也不外套 lipgloss Width。
+		m.input.SetWidth(m.width - inputGutterWidth)
 		m.input.SetHeight(inputAreaHeight - 1)
 		// 窗口尺寸变了 → wrap 重算 → 老 line 号失效,必须清选区
 		m.selecting = false
@@ -582,14 +577,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		chatLeft, chatTop := 0, 0
 		chatRight := chatLeft + leftW
 		chatBottom := chatTop + vpH
-		inputRow := chatTop + vpH // 输入框那一行 (chat 高 vpH,紧贴下面)
 		inChat := msg.X >= chatLeft && msg.X < chatRight &&
 			msg.Y >= chatTop && msg.Y < chatBottom
-		inInputRow := msg.Y == inputRow && msg.X >= chatLeft && msg.X <= chatRight
+		// 输入区:body 下方整块(空白行 + textarea 行),Y ∈ [vpH, m.height)。
+		inInput := msg.Y >= vpH && msg.Y < m.height && msg.X >= 0 && msg.X < m.width
 
-		// 输入框双击切换全选(模拟 GUI 双击全选词,但因为输入框单行,这里直接全选整行)。
-		// 第一次 click 记下时间戳;400ms 内第二次 click 在同一行 → toggle inputAllSelected。
-		if inInputRow {
+		if inInput {
+			// 双击切换全选;单击进入输入区:清 chat 选区 + 起一次"拖拽全选"。
 			now := time.Now()
 			if !m.lastInputClickAt.IsZero() && now.Sub(m.lastInputClickAt) < 400*time.Millisecond {
 				if m.input.Value() != "" {
@@ -598,12 +592,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.lastInputClickAt = time.Time{} // 清零,避免三击当成第二次双击
 			} else {
 				m.lastInputClickAt = now
-				// 单击进入输入框区域时,若有 chat 区选区高亮 → 清掉,焦点回输入框
+				m.inputDragging = true // 后续 MouseMotion 一动就全选
 				if m.selecting {
 					m.selecting = false
-					m.refreshViewport()
 				}
 			}
+			m.refreshViewport()
 			return m, nil
 		}
 
@@ -632,6 +626,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		chatLeft, chatTop := 0, 0
 		chatRight := chatLeft + leftW
 		chatBottom := chatTop + vpH
+
+		// 输入框拖拽:一旦移动就全选高亮(输入框内容通常一行/几行,直接整段选)。
+		if m.inputDragging {
+			if m.input.Value() != "" && !m.inputAllSelected {
+				m.inputAllSelected = true
+				m.refreshViewport()
+			}
+			return m, nil
+		}
 
 		if m.selecting {
 			scrolled := false
@@ -670,6 +673,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if msg.Button != tea.MouseLeft {
+			return m, nil
+		}
+		// 输入框拖拽全选松手:复制整段输入框内容(不弹"已复制"提示)。
+		if m.inputDragging {
+			m.inputDragging = false
+			if m.inputAllSelected {
+				if text := m.input.Value(); text != "" {
+					_ = writeClipboardText(text)
+					return m, tea.SetClipboard(text)
+				}
+			}
 			return m, nil
 		}
 		if m.selecting {
