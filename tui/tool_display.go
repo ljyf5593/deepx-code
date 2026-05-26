@@ -3,20 +3,10 @@ package tui
 import (
 	"encoding/json"
 	"os"
-	"strconv"
 	"strings"
 
 	"charm.land/lipgloss/v2"
 )
-
-// countTodos 数一下 Todo 工具参数里 todos 数组的长度,用于工具行展示步数。
-func countTodos(argsJSON string) int {
-	var w struct {
-		Todos []json.RawMessage `json:"todos"`
-	}
-	_ = json.Unmarshal([]byte(argsJSON), &w)
-	return len(w.Todos)
-}
 
 // toolIcons 给每个工具一个 emoji 图标,统一 2 cell 显示宽。
 //
@@ -62,11 +52,6 @@ func formatToolCallLine(name, argsJSON string) string {
 	}
 	if name == "Update" {
 		return formatUpdatePreview(icon, argsJSON)
-	}
-	if name == "Todo" {
-		// Todo 全量快照参数很长(整张清单),不展开 —— 清单本身由下方 live overlay 渲染。
-		// 这里只标一行 "更新待办 (N 步)",避免把 JSON 怼进工具列表。
-		return icon + " " + name + " (" + strconv.Itoa(countTodos(argsJSON)) + " 步)"
 	}
 	arg := extractMainArg(name, argsJSON)
 	// icon 是 emoji(2 cell),显式加 1 空格分隔 ToolName,避免 emoji 紧贴字母在

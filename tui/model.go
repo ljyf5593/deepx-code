@@ -1138,20 +1138,24 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.streamCh == nil {
 			return m, nil
 		}
-		// 工具调用 = 一次"动作",紧凑单行展示:<icon> Name (主参数)
 		m.status = "tool"
-		m.turnToolCalls++
-		m.activeTool = msg.Name
-		line := formatToolCallLine(msg.Name, msg.Args)
-		// 切到 tools 段。tools 段不走 markdown 渲染(refreshViewport 里特判),
-		// 所以单 \n 直接换行,无需 hard break trick。连续 tool_call 同段归并 → 一组色条。
-		if m.chatContent.LastKind() == kindTools {
-			if !m.chatContent.EndsWithNewline() {
-				m.chatContent.Append("\n")
+		// Todo 是可见清单的「全量快照更新」,不是一次干活动作:清单本身由下方 live overlay
+		// 实时勾选,每次更新再往 chat 打一行 "📌 Todo" 是纯噪音。所以 Todo 不留 chat 行、
+		// 也不计入"N 次工具调用"。其余工具照旧:紧凑单行 <icon> Name (主参数)。
+		if msg.Name != "Todo" {
+			m.turnToolCalls++
+			m.activeTool = msg.Name
+			line := formatToolCallLine(msg.Name, msg.Args)
+			// 切到 tools 段。tools 段不走 markdown 渲染(refreshViewport 里特判),
+			// 所以单 \n 直接换行,无需 hard break trick。连续 tool_call 同段归并 → 一组色条。
+			if m.chatContent.LastKind() == kindTools {
+				if !m.chatContent.EndsWithNewline() {
+					m.chatContent.Append("\n")
+				}
+				m.chatContent.Append(line + "\n")
+			} else {
+				m.chatContent.Open(kindTools, line+"\n")
 			}
-			m.chatContent.Append(line + "\n")
-		} else {
-			m.chatContent.Open(kindTools, line+"\n")
 		}
 		m.refreshViewport()
 		// review 模式:暂停流,等待用户确认。web 端也弹确认层。
@@ -1531,6 +1535,9 @@ func rebuildChatFromHistory(cl *chatLog, history []agent.ChatMessage) {
 			// 工具调用行:同 ToolCallStartMsg,连续 tool_call 归并到同一段(同 kind)。
 			// tools 段跳过 markdown 渲染,单 \n 即可保证每条单独一行。
 			for _, tc := range msg.ToolCalls {
+				if tc.Function.Name == "Todo" {
+					continue // Todo 不留 chat 行(同运行时),清单由 live overlay 渲染
+				}
 				line := formatToolCallLine(tc.Function.Name, tc.Function.Arguments)
 				if cl.LastKind() == kindTools {
 					if !cl.EndsWithNewline() {
