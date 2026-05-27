@@ -229,6 +229,8 @@ var Tools = []Tool{
 			"不会主动退出 —— 默认(前台)调用会一直阻塞到 timeout 才返回,并把子进程甩成孤儿。" +
 			"启动这类进程时**必须传 `run_in_background: true`**:立即返回一个句柄 id(形如 bash_1),不阻塞。" +
 			"随后用 `BashOutput(id)` 读输出/查是否就绪,用完用 `KillBash(id)` 结束。" +
+			"\n⚠️ **不要用 shell 的 `&` 或 `nohup` 在前台模式里自己后台化**(如 `./server &`):那样救不了," +
+			"Go 仍会等子进程继承的输出管道关闭而卡死到 timeout,还会留孤儿;要后台跑就用 `run_in_background: true`。" +
 			"\n前台模式(默认)只用来跑会主动退出的命令:构建 / 单测 / lint / grep / git / ls / 安装依赖 / 一次性脚本。",
 		Parameters: ToolParam{
 			Type: "object",

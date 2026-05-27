@@ -152,20 +152,34 @@ func BashOutput(args map[string]any) ToolResult {
 }
 
 // KillBash 结束后台进程(连同其子进程树),返回剩余输出,并从注册表移除。
+// 进程若已自行退出,视为干净的 no-op(成功),不报"process already finished"。
 func KillBash(args map[string]any) ToolResult {
 	p, errMsg := lookupBg(args)
 	if p == nil {
 		return ToolResult{Output: errMsg, Success: false}
 	}
-	killErr := killProc(p.cmd)
+	p.mu.Lock()
+	alreadyDone := p.done
+	p.mu.Unlock()
+
+	var killErr error
+	if !alreadyDone { // 已退出就不必再杀(killProc 仍对竞态下的"已退出"容错)
+		killErr = killProc(p.cmd)
+	}
+
 	bgMu.Lock()
 	delete(bgProcs, p.id)
 	bgMu.Unlock()
 
 	tail := p.buf.drain()
-	msg := fmt.Sprintf("已结束 %s。", p.id)
-	if killErr != nil {
+	var msg string
+	switch {
+	case killErr != nil:
 		msg = fmt.Sprintf("结束 %s 时出错: %v", p.id, killErr)
+	case alreadyDone:
+		msg = fmt.Sprintf("%s 已自行退出,已从列表移除。", p.id)
+	default:
+		msg = fmt.Sprintf("已结束 %s。", p.id)
 	}
 	if tail != "" {
 		msg += "\n剩余输出:\n" + tail

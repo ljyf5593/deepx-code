@@ -66,8 +66,8 @@ func TestBackgroundLifecycle(t *testing.T) {
 	}
 }
 
-// 传了 run_in_background 就不受 looksLikeBackgrounding 护栏影响(走后台启动)。
-func TestRunCommandBackgroundBypassesGuard(t *testing.T) {
+// run_in_background:true 走后台启动并立即返回句柄,不阻塞。
+func TestRunCommandBackgroundStart(t *testing.T) {
 	res := RunCommand(map[string]any{
 		"command":           "echo hi",
 		"run_in_background": true,
@@ -76,6 +76,47 @@ func TestRunCommandBackgroundBypassesGuard(t *testing.T) {
 		t.Fatalf("run_in_background 启动不应被护栏拦下: %q", res.Output)
 	}
 	KillBash(map[string]any{"id": extractID(t, res.Output)}) // 收尾,别留在注册表
+}
+
+// 杀一个已自行退出的后台进程应是干净的成功,而非报 "process already finished"(F2)。
+func TestKillBashAfterNaturalExit(t *testing.T) {
+	res := RunCommand(map[string]any{
+		"command":           "echo hi", // 立即退出
+		"run_in_background": true,
+	})
+	if !res.Success {
+		t.Fatalf("启动失败: %s", res.Output)
+	}
+	id := extractID(t, res.Output)
+
+	// 等它自行退出(done=true)
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		bgMu.Lock()
+		p := bgProcs[id]
+		bgMu.Unlock()
+		if p == nil {
+			t.Fatal("KillBash 前进程不该被移除")
+		}
+		p.mu.Lock()
+		done := p.done
+		p.mu.Unlock()
+		if done {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("echo 进程迟迟未退出")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	kill := KillBash(map[string]any{"id": id})
+	if !kill.Success {
+		t.Fatalf("杀已退出的后台进程应成功,got: %q", kill.Output)
+	}
+	if !strings.Contains(kill.Output, "已自行退出") {
+		t.Fatalf("应说明进程已自行退出,got: %q", kill.Output)
+	}
 }
 
 func TestBackgroundUnknownID(t *testing.T) {
