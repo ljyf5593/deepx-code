@@ -98,7 +98,8 @@ if ($FromSource) {
         Push-Location (Join-Path $tmp $Repo)
         try {
             Write-Info "Running go build..."
-            & go build -trimpath -ldflags="-s -w" -o $BinName .
+            $builtinVer = Get-Date -Format 'yyyyMMddHHmmss'  # 注入内嵌 skill 版本号,触发安装后自动刷新
+            & go build -trimpath -ldflags="-s -w -X deepx/skill.builtinVersion=$builtinVer" -o $BinName .
             if ($LASTEXITCODE -ne 0) { throw "go build failed" }
             New-Item -ItemType Directory -Path $BinDir -Force | Out-Null
             Copy-Item -Force (Join-Path (Get-Location) $BinName) $BinPath

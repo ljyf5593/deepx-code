@@ -35,6 +35,9 @@ builds:
       - -X main.version={{.Version}}
       - -X main.commit={{.Commit}}
       - -X main.date={{.Date}}
+      # 内嵌 skill 版本随发布版本走:发布版只在升级到新版本时刷新一次内置 skill,
+      # 而不是像默认 "dev" 那样每次启动都重新解压(还会覆盖用户的本地修改)。
+      - -X deepx/skill.builtinVersion={{.Version}}
 
 archives:
   - id: default

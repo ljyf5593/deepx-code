@@ -225,26 +225,48 @@ var Tools = []Tool{
 	{
 		Name: "Bash",
 		Description: "在 shell 中执行命令并返回 stdout/stderr。可指定 cwd 与超时秒数(默认 60)。" +
-			"\n\n**不要用本工具启动长时间运行的进程**(开发服务器 / 守护进程 / 无限监视器),例如:" +
-			"\n  - npm run dev / vite / pnpm dev / yarn start" +
-			"\n  - python -m http.server" +
-			"\n  - tail -f / watch -n" +
-			"\n  - 任何 daemon" +
-			"\n这类命令不会主动退出,deepx 必须等子进程 stdout/stderr 关闭才能拿到结果," +
-			"会导致整个 agent 卡死到 timeout 触发(默认 60s)。" +
-			"加 `&` / `nohup` 也不能解决 — Go 仍会等继承的文件描述符关闭。" +
-			"\n本工具只用来跑会主动退出的命令:构建 / 单测 / lint / grep / git / ls / 安装依赖 / 一次性脚本。" +
-			"\n如果用户要求启动服务,直接告诉用户在自己终端里手动跑,不要调本工具。",
+			"\n\n**常驻进程**(开发服务器 / watch / daemon,如 npm run dev、vite、python -m http.server、tail -f)" +
+			"不会主动退出 —— 默认(前台)调用会一直阻塞到 timeout 才返回,并把子进程甩成孤儿。" +
+			"启动这类进程时**必须传 `run_in_background: true`**:立即返回一个句柄 id(形如 bash_1),不阻塞。" +
+			"随后用 `BashOutput(id)` 读输出/查是否就绪,用完用 `KillBash(id)` 结束。" +
+			"\n前台模式(默认)只用来跑会主动退出的命令:构建 / 单测 / lint / grep / git / ls / 安装依赖 / 一次性脚本。",
 		Parameters: ToolParam{
 			Type: "object",
 			Properties: map[string]PropDef{
-				"command": {Type: "string", Description: "完整命令行（通过 sh -c 执行）"},
-				"cwd":     {Type: "string", Description: "工作目录（可选）"},
-				"timeout": {Type: "integer", Description: "超时秒数，默认 60"},
+				"command":           {Type: "string", Description: "完整命令行（通过 sh -c 执行）"},
+				"cwd":               {Type: "string", Description: "工作目录（可选）"},
+				"timeout":           {Type: "integer", Description: "超时秒数，默认 60（仅前台模式生效）"},
+				"run_in_background": {Type: "boolean", Description: "true 则后台启动常驻进程,立即返回句柄 id,不阻塞;配合 BashOutput / KillBash 使用"},
 			},
 			Required: []string{"command"},
 		},
 		Executor: RunCommand,
+		ReadOnly: false,
+	},
+	{
+		Name:        "BashOutput",
+		Description: "读取某个后台进程(Bash run_in_background 启动)自上次读取以来的新输出,并报告其运行/退出状态。用于等待服务就绪、查看日志、确认是否报错。",
+		Parameters: ToolParam{
+			Type: "object",
+			Properties: map[string]PropDef{
+				"id": {Type: "string", Description: "后台进程句柄 id（Bash run_in_background 返回的，形如 bash_1）"},
+			},
+			Required: []string{"id"},
+		},
+		Executor: BashOutput,
+		ReadOnly: true, // 只读输出,不动文件
+	},
+	{
+		Name:        "KillBash",
+		Description: "结束一个后台进程(连同其子进程树),释放端口/资源。常驻服务验证完务必调用,避免孤儿进程堆积。",
+		Parameters: ToolParam{
+			Type: "object",
+			Properties: map[string]PropDef{
+				"id": {Type: "string", Description: "后台进程句柄 id（形如 bash_1）"},
+			},
+			Required: []string{"id"},
+		},
+		Executor: KillBash,
 		ReadOnly: false,
 	},
 	{

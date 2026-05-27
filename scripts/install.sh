@@ -149,7 +149,8 @@ if [ "$FROM_SOURCE" = true ]; then
     info "Cloning ${OWNER}/${REPO} into $TMPDIR..."
     git clone --depth=1 "https://github.com/${OWNER}/${REPO}.git" "$TMPDIR/${REPO}"
     info "Running go build..."
-    (cd "$TMPDIR/${REPO}" && go build -trimpath -ldflags="-s -w" -o "$BIN_NAME" .)
+    BUILTIN_VER=$(date +%Y%m%d%H%M%S)  # 注入内嵌 skill 版本号,触发安装后自动刷新
+    (cd "$TMPDIR/${REPO}" && go build -trimpath -ldflags="-s -w -X deepx/skill.builtinVersion=${BUILTIN_VER}" -o "$BIN_NAME" .)
     mkdir -p "$BIN_DIR"
     install -m 0755 "$TMPDIR/${REPO}/${BIN_NAME}" "$BIN_DIR/${BIN_NAME}"
     success "Built and installed: $BIN_DIR/$BIN_NAME"
