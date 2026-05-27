@@ -290,14 +290,14 @@ func statusColor(s string) color.Color {
 	return lipgloss.Color("7")
 }
 
-// codegraphColor 给代码图谱状态上色:加载=高亮、就绪=绿、更新=黄、未构建=暗。
+// codegraphColor 给代码图谱状态上色:加载=高亮、就绪=绿、更新/降级=黄、未构建/已禁用=暗。
 func codegraphColor(s string) color.Color {
 	switch s {
 	case "loading":
 		return highlightColor
 	case "ready":
 		return lipgloss.Color("10")
-	case "stale":
+	case "stale", "degraded":
 		return lipgloss.Color("11")
 	}
 	return subtleColor

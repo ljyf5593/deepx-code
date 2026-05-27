@@ -215,10 +215,12 @@ var translations = map[string]map[Lang]string{
 	"done.tools":       {LangZH: "次工具调用", LangEN: "tool calls"},
 
 	// === CodeGraph 状态值 ===
-	"codegraph.idle":    {LangZH: "—", LangEN: "—"},
-	"codegraph.loading": {LangZH: "加载", LangEN: "loading"},
-	"codegraph.ready":   {LangZH: "就绪", LangEN: "ready"},
-	"codegraph.stale":   {LangZH: "更新", LangEN: "stale"},
+	"codegraph.idle":     {LangZH: "—", LangEN: "—"},
+	"codegraph.loading":  {LangZH: "加载", LangEN: "loading"},
+	"codegraph.ready":    {LangZH: "就绪", LangEN: "ready"},
+	"codegraph.stale":    {LangZH: "更新", LangEN: "stale"},
+	"codegraph.disabled": {LangZH: "已禁用", LangEN: "disabled"},
+	"codegraph.degraded": {LangZH: "降级", LangEN: "degraded"},
 
 	// === Setup modal ===
 	"setup.title": {

@@ -18,8 +18,10 @@ var cgCalls atomic.Int64
 // CodeGraphCalls 返回 CodeGraph 工具累计调用次数。
 func CodeGraphCalls() int { return int(cgCalls.Load()) }
 
-// SetCodeGraphRoot 绑定 workspace 根目录并新建索引,随即后台预热(开机就建一次,
-// 状态栏立刻走 加载→就绪,不必等模型首次调用)。
+// SetCodeGraphRoot 绑定 workspace 根目录并新建索引,随即尝试后台预热。
+// 预热是否真正发生由 root 的安全等级决定(见 codegraph.classifyRoot):
+// 危险根(home / 文件系统根 / 系统目录)直接禁用,绝不遍历;非项目散目录不自动预热,
+// 留到模型显式查询时惰性构建。只有识别为项目根才像以前那样开机就建。
 func SetCodeGraphRoot(root string) {
 	cgIndex = codegraph.NewIndex(root)
 	cgIndex.Prewarm()
@@ -49,6 +51,9 @@ func CodeGraph(args map[string]any) ToolResult {
 	cgCalls.Add(1)
 	if cgIndex == nil {
 		return ToolResult{Output: "代码图谱未启用(workspace 未初始化)", Success: false}
+	}
+	if cgIndex.Disabled() {
+		return ToolResult{Output: fmt.Sprintf("代码图谱已禁用:%s。请在具体的项目目录(含 .git/go.mod/package.json 等)中启动,而非主目录或系统根目录。", cgIndex.Reason()), Success: false}
 	}
 	op, _ := args["op"].(string)
 	op = strings.TrimSpace(strings.ToLower(op))
