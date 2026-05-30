@@ -36,6 +36,9 @@ type ModelEntry struct {
 	APIKey        string
 	ContextWindow int // 上下文窗口大小(tokens)
 	MaxTokens     int // 单次生成的 completion 上限(tokens);字段顺序需与 config.ModelEntry 一致
+	// 推理参数(跨供应商通用,空值不发送)。详见 config.ModelEntry 同名字段注释。
+	ReasoningEffort string
+	Thinking        string
 }
 
 // ModelConfig 双模型配置。Flash 处理简单/查询型任务,Pro 处理复杂/规划型任务。
@@ -161,6 +164,48 @@ type chatRequest struct {
 	StreamOptions *streamOptions         `json:"stream_options,omitempty"`
 	Messages      []ChatMessage          `json:"messages"`
 	Tools         []tools.OpenAIToolSpec `json:"tools,omitempty"`
+	// 推理参数 —— **两个并列的顶层字段**(对照 DeepSeek 官方文档):
+	//
+	//   {"thinking": {"type": "enabled"}, "reasoning_effort": "high"}
+	//
+	// 不要写成嵌套(reasoning_effort 不是 thinking 的子字段)。
+	// 空值严格 omitempty —— 用户不设就完全没有对应 JSON 键,任何不支持的模型
+	// (MiMo / 未来 OpenAI-兼容新模型)都不会被多余字段炸 400。
+	Thinking        *thinkingOption `json:"thinking,omitempty"`
+	ReasoningEffort string          `json:"reasoning_effort,omitempty"`
+}
+
+// thinkingOption 是 DeepSeek 思考开关的请求体格式:`{"type": "enabled"}` 或 `{"type": "disabled"}`。
+// DeepSeek 默认 enabled,MiMo 默认 disabled。
+type thinkingOption struct {
+	Type string `json:"type"`
+}
+
+// buildThinkingOption 把 ModelEntry.Thinking 字符串转成请求体 thinking 对象。
+// 空 / 未识别值返回 nil → omitempty 整个键消失。
+func buildThinkingOption(v string) *thinkingOption {
+	switch v {
+	case "enabled", "disabled":
+		return &thinkingOption{Type: v}
+	}
+	return nil
+}
+
+// validateReasoningEffort 把 ModelEntry.ReasoningEffort 过一遍白名单,未识别值
+// (yaml 笔误、未来废弃档等)返回 "" → omitempty 不发,防止脏值送到服务端导致 400。
+//
+// 取值(DeepSeek 文档):
+//   - canonical: high (默认) | max
+//   - 兼容别名:  low / medium → high;xhigh → max
+//
+// 白名单纳入全部 5 个,既覆盖 DeepSeek canonical,也覆盖 OpenAI o1/o3 风格(low/medium/high)
+// —— 后者拼到 DeepSeek 自动映射,拼到 OpenAI-兼容端就是合法标准取值。
+func validateReasoningEffort(v string) string {
+	switch v {
+	case "low", "medium", "high", "max", "xhigh":
+		return v
+	}
+	return ""
 }
 
 type streamOptions struct {
@@ -486,7 +531,9 @@ func StartStream(
 			assistantContent, reasoning, toolCalls, usage, err := streamOnce(
 				ctx,
 				currentEntry.APIKey, currentEntry.BaseURL, currentEntry.Model,
-				convo, currentEntry.MaxTokens, toolSpecs, ch,
+				convo, currentEntry.MaxTokens, toolSpecs,
+				currentEntry.ReasoningEffort, currentEntry.Thinking,
+				ch,
 			)
 			if err != nil {
 				// context 取消是主动中断,不报 Error 给 UI。
@@ -678,12 +725,17 @@ func StartStream(
 }
 
 // streamOnce 发起一次 chat/completions 请求,返回 (content, reasoning_content, tool_calls, usage, error)。
+//
+// reasoningEffort / thinking 是跨供应商通用的推理参数,**空字符串严格不发送**(走各家 API 默认),
+// 这是兼容 MiMo 等不支持这俩字段的模型的关键 —— 任何不主动启用的模型都不会被多余字段炸 400。
 func streamOnce(
 	ctx context.Context,
 	apiKey, baseURL, modelID string,
 	convo []ChatMessage,
 	maxTokens int,
 	toolSpecs []tools.OpenAIToolSpec,
+	reasoningEffort string,
+	thinking string,
 	ch chan<- tea.Msg,
 ) (string, string, []ToolCall, *UsageInfo, error) {
 
@@ -696,11 +748,14 @@ func streamOnce(
 		},
 		Messages: convo,
 		Tools:    toolSpecs,
+		// thinking 和 reasoning_effort 是两个独立顶层字段。各自 omitempty,
+		// 用户设了就发、没设就不发,白名单内的值才透传(防 yaml 笔误)。
+		Thinking:        buildThinkingOption(thinking),
+		ReasoningEffort: validateReasoningEffort(reasoningEffort),
 	})
 	if err != nil {
 		return "", "", nil, nil, err
 	}
-
 	req, err := http.NewRequestWithContext(ctx, "POST", baseURL+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		return "", "", nil, nil, err

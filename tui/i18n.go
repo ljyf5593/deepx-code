@@ -208,6 +208,18 @@ var translations = map[string]map[Lang]string{
 		LangZH: "锁定/自动选择模型 (auto|flash|pro)",
 		LangEN: "Pin/auto-select model (auto|flash|pro)",
 	},
+	"cmd.reasoning.desc": {
+		LangZH: "设置 thinking / reasoning_effort(per-role,空值不发)",
+		LangEN: "Set thinking / reasoning_effort (per-role, empty = don't send)",
+	},
+	"reasoning.modal.title": {
+		LangZH: "推理参数(空值 = 不发送,走 API 默认 / 兼容 MiMo 等)",
+		LangEN: "Reasoning params (empty = don't send, falls back to API default / MiMo-safe)",
+	},
+	"reasoning.modal.footer": {
+		LangZH: "↑/↓ 选行 · ←/→ 改值(立即生效) · Enter / Esc 关闭",
+		LangEN: "↑/↓ row · ←/→ change value (applied instantly) · Enter / Esc close",
+	},
 
 	// === Right panel section titles ===
 	// 注:section() 会 strings.ToUpper(title) — 对英文是大写化,对中文是 no-op,两边都能用。

@@ -114,6 +114,12 @@ type model struct {
 	fileMentionIdx   int
 	fileMentionCache []string
 
+	// /reasoning 弹窗:showReasoningModal=true 时路由按键到弹窗;reasoningModalRow ∈ [0,4):
+	// 0=flash.thinking, 1=flash.effort, 2=pro.thinking, 3=pro.effort。
+	// 每次 ←/→ 立刻写盘,所以无 draft / cancel 概念,Enter / Esc 都是关闭。
+	showReasoningModal bool
+	reasoningModalRow  int
+
 	// lastInputClickAt 记录最近一次落在输入框那一行的左键 click 时间戳。
 	// 用来手动检测双击:两次 click 间隔 < 400ms 即视为双击,切换 inputAllSelected。
 	// bubbletea v2 的 MouseClickMsg 不带 Clicks 计数,只能自己算。
@@ -633,7 +639,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.MouseWheelMsg:
 		// modal 期间忽略
-		if m.showSetup || m.showLangModal || m.showModelModal {
+		if m.showSetup || m.showLangModal || m.showModelModal || m.showReasoningModal {
 			return m, nil
 		}
 		// 滚轮: 转给 viewport,顺便取消选区
@@ -645,7 +651,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, c
 
 	case tea.MouseClickMsg:
-		if m.showSetup || m.showLangModal || m.showModelModal {
+		if m.showSetup || m.showLangModal || m.showModelModal || m.showReasoningModal {
 			return m, nil
 		}
 		if msg.Button != tea.MouseLeft {
@@ -694,7 +700,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.MouseMotionMsg:
-		if m.showSetup || m.showLangModal || m.showModelModal {
+		if m.showSetup || m.showLangModal || m.showModelModal || m.showReasoningModal {
 			return m, nil
 		}
 		if msg.Button != tea.MouseLeft {
@@ -748,7 +754,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.MouseReleaseMsg:
-		if m.showSetup || m.showLangModal || m.showModelModal {
+		if m.showSetup || m.showLangModal || m.showModelModal || m.showReasoningModal {
 			return m, nil
 		}
 		if msg.Button != tea.MouseLeft {
@@ -883,6 +889,33 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			case "esc", "ctrl+c":
 				m.showLangModal = false
+				return m, nil
+			}
+			return m, nil
+		}
+
+		// /reasoning 弹窗:↑/↓ 切行(4 行:flash/pro × thinking/effort),←/→ 在当前行切值并
+		// 立即写盘,Enter / Esc 关闭(无 cancel,改了就入盘了)。
+		if m.showReasoningModal {
+			switch msg.String() {
+			case "up", "k":
+				if m.reasoningModalRow > 0 {
+					m.reasoningModalRow--
+				}
+				return m, nil
+			case "down", "j":
+				if m.reasoningModalRow < 3 {
+					m.reasoningModalRow++
+				}
+				return m, nil
+			case "left", "h":
+				m.reasoningStepRow(m.reasoningModalRow, -1)
+				return m, nil
+			case "right", "l":
+				m.reasoningStepRow(m.reasoningModalRow, 1)
+				return m, nil
+			case "enter", "esc", "ctrl+c":
+				m.showReasoningModal = false
 				return m, nil
 			}
 			return m, nil
@@ -1748,6 +1781,8 @@ func (m *model) handleSlashCommand(input string) tea.Cmd {
 		m.openMcpAddModal()
 	case "/mcp-delete":
 		m.openMcpDeleteModal()
+	case "/reasoning":
+		m.openReasoningModal()
 	case "/lang":
 		m.showLangModal = true
 		// 默认光标停在当前语言上

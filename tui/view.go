@@ -245,6 +245,9 @@ func (m model) View() tea.View {
 	if m.showModelModal {
 		mainUI = overlayCentered(mainUI, m.modelModalBlock(), m.width, m.height)
 	}
+	if m.showReasoningModal {
+		mainUI = overlayCentered(mainUI, m.reasoningModalBlock(), m.width, m.height)
+	}
 	if m.showMcpAdd {
 		mainUI = overlayCentered(mainUI, m.mcpAddModalBlock(), m.width, m.height)
 	}

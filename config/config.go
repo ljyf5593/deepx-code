@@ -31,6 +31,10 @@ type ModelEntry struct {
 	APIKey        string `yaml:"api_key"`
 	ContextWindow int    `yaml:"context_window"` // 上下文窗口大小(tokens)
 	MaxTokens     int    `yaml:"max_tokens"`     // 单次生成的 completion 上限(tokens)
+	// 推理参数,跨供应商通用,空值绝对不发送 → 任何不支持的模型(MiMo、未来 OpenAI-兼容模型)
+	// 都不会被多余字段炸 400。用户主动设了才往 chat/completions 请求体里塞。
+	ReasoningEffort string `yaml:"reasoning_effort,omitempty"` // "low" / "medium" / "high"
+	Thinking        string `yaml:"thinking,omitempty"`         // "enabled" / "disabled"
 }
 
 // WebConfig 本地 web dashboard 配置。
