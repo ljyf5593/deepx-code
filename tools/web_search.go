@@ -3,8 +3,8 @@ package tools
 import (
 	"errors"
 	"fmt"
-	"io"
 	stdhtml "html"
+	"io"
 	"net/http"
 	"net/url"
 	"regexp"

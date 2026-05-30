@@ -106,6 +106,33 @@ func startBackground(command, cwd string) ToolResult {
 	}
 }
 
+// adoptBackground 把一个已经 cmd.Start() 起来、stdout/stderr 都指向 buf 的前台命令
+// 接管到后台子系统:不杀进程,只换管理模式。返回分配的句柄 id。
+//
+// 用在 RunCommand 的 auto-handoff 路径:命令前台跑超过预算仍未退出,直接交给 bg,
+// 这样 `python -m http.server &` 这类命令(包括正确不带 `&` 的)能继续提供服务,
+// 模型用 BashOutput / KillBash 接力,验证步骤照旧能跑(对照 issue #20)。
+//
+// waitErrCh 是调用方那边读 cmd.Wait() 结果的 channel —— 命令真正退出时会有一个值,
+// 这里起 goroutine 接收并更新 bgProc.done / exitErr,跟 startBackground 的语义对齐。
+func adoptBackground(cmd *exec.Cmd, buf *lockedBuffer, startedAt time.Time, waitErrCh <-chan error) string {
+	bgMu.Lock()
+	bgSeq++
+	id := fmt.Sprintf("bash_%d", bgSeq)
+	p := &bgProc{id: id, cmd: cmd, buf: buf, startedAt: startedAt}
+	bgProcs[id] = p
+	bgMu.Unlock()
+
+	go func() {
+		err := <-waitErrCh
+		p.mu.Lock()
+		p.done = true
+		p.exitErr = err
+		p.mu.Unlock()
+	}()
+	return id
+}
+
 func lookupBg(args map[string]any) (*bgProc, string) {
 	id, _ := args["id"].(string)
 	if id == "" {
