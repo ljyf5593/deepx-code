@@ -50,8 +50,8 @@
 **1. 설치**
 
 ```bash
-# macOS / Linux
-curl -fsSL https://raw.githubusercontent.com/itmisx/deepx-code/main/scripts/install.sh | bash
+# macOS / Linux(끝의 `&& exec $SHELL`이 현재 셸을 새로 시작해 PATH에 deepx를 즉시 반영합니다. rc 소스나 새 터미널을 열 필요가 없습니다)
+curl -fsSL https://raw.githubusercontent.com/itmisx/deepx-code/main/scripts/install.sh | bash && exec $SHELL
 
 # Windows (PowerShell)
 irm https://raw.githubusercontent.com/itmisx/deepx-code/main/scripts/install.ps1 | iex

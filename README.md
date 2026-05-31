@@ -50,8 +50,8 @@
 **1. 安装**
 
 ```bash
-# macOS / Linux
-curl -fsSL https://raw.githubusercontent.com/itmisx/deepx-code/main/scripts/install.sh | bash
+# macOS / Linux(尾部 `&& exec $SHELL` 让当前 shell 立即拿到新 PATH,不用再 source 或重开 terminal)
+curl -fsSL https://raw.githubusercontent.com/itmisx/deepx-code/main/scripts/install.sh | bash && exec $SHELL
 
 # Windows (PowerShell)
 irm https://raw.githubusercontent.com/itmisx/deepx-code/main/scripts/install.ps1 | iex
