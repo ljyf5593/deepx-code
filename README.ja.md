@@ -29,6 +29,7 @@
 - **💾 ロスレスなセッション永続化** —— gob が `tool_calls` / ツール結果 / `reasoning_content` を完全保持し、再起動後もシームレスに継続。ウィンドウが埋まると自動で階層圧縮。
 - **🔌 MCP + Skill エコシステム** —— MCP ネイティブ対応。Claude の skill ディレクトリと互換で、既存の skill をそのまま再利用。
 - **🛡️ レビューモード** —— ファイル書き込み / Shell 実行はデフォルトで人間の確認を要求。
+- **⚡ 非対話 `exec` モード** —— `deepx exec "タスク"` は一度だけ実行して結果を stdout に直接出力。パイプで入力、出力をリダイレクト、スクリプト / CI / cron に組み込み可能で、**TUI に入る必要なし**(下記参照)。
 
 ## 📊 Claude Code との比較
 
@@ -64,11 +65,16 @@ irm https://raw.githubusercontent.com/itmisx/deepx-code/main/scripts/install.ps1
 
 `~/.local/bin/deepx` にインストールされます。`deepx upgrade` でいつでも更新可能。
 
-**2. プロジェクトに入って起動**
+**2. ターミナルでプロジェクトに入って起動**
+
+deepx は**ターミナルプログラム**です。ターミナルを開き、プロジェクトに `cd` して `deepx` を実行すると対話 UI に入ります。
+
+- どのターミナルでも OK:macOS の Terminal / iTerm2、Linux のターミナル、Windows Terminal / PowerShell。
+- **VS Code 内蔵ターミナル**もおすすめ(`Terminal → New Terminal`、または `` Ctrl+` ``):開いているプロジェクトのディレクトリにいるので、`deepx` がそのプロジェクトに対して動き、編集はエディタに即座に反映されます。
 
 ```bash
-cd <あなたのプロジェクト>
-deepx
+cd <あなたのプロジェクト>   # VS Code の内蔵ターミナルなら通常すでにプロジェクト直下
+deepx                       # 対話型 TUI に入る
 ```
 
 **3. 設定**
@@ -79,6 +85,16 @@ deepx
 | 手動上書き    | `~/.deepx/model.yaml` を直接編集し、role（flash/pro）ごとに `base_url` / `model` / `api_key` / `max_tokens` / `context_window` を上書き可能。flash と pro で別プロバイダも指定できる。 |
 | Skill         | `<ワークスペース>/.deepx/skills/` に配置、または `~/.claude/skills/` などを再利用。 |
 | MCP           | TUI 内で `/mcp-add` で追加、`/mcp-list` で一覧。              |
+
+## ⚡ 非対話実行（`deepx exec`）
+
+フル TUI に入らず deepx をスクリプトに組み込みたいときは `deepx exec "<タスク>"` を使います。タスクを実行し、結果をそのままターミナル(stdout)に出力して終了します。結果のみ、途中の出力はありません。
+
+```bash
+deepx exec "README の機能リストを英語に翻訳して README.en.md に書き込む"
+```
+
+パイプ入力にも対応(`cat error.log | deepx exec "このエラーを分析して"`)。先に対話型 `deepx` で API キーを設定しておいてください。
 
 ## 🧠 仕組み
 

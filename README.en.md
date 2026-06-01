@@ -29,6 +29,7 @@
 - **💾 Lossless session persistence** — gob preserves `tool_calls` / tool results / `reasoning_content`, so restarts resume seamlessly; auto layered compaction when the window fills.
 - **🔌 MCP + skill ecosystem** — native MCP; compatible with Claude's skill directories, reuse what you have.
 - **🛡️ Review mode** — file writes / shell run behind human confirmation by default.
+- **⚡ Non-interactive `exec` mode** — `deepx exec "task"` runs once and prints the result straight to stdout; pipe data in, redirect output, drop it into scripts / CI / cron — **no TUI needed** (see the section below).
 
 ## 📊 vs Claude Code
 
@@ -64,11 +65,16 @@ irm https://raw.githubusercontent.com/itmisx/deepx-code/main/scripts/install.ps1
 
 Installs to `~/.local/bin/deepx`; upgrade any time with `deepx upgrade`.
 
-**2. Enter a project and launch**
+**2. Open a terminal in your project and launch**
+
+deepx is a **terminal program**: open a terminal, `cd` into your project, and run `deepx` to enter the interactive UI.
+
+- Any terminal works: macOS Terminal / iTerm2, a Linux terminal, Windows Terminal / PowerShell.
+- The **VS Code integrated terminal** is recommended too (`Terminal → New Terminal`, or `` Ctrl+` ``): it already sits in your open project, so `deepx` works right against it and edits show up live in the editor.
 
 ```bash
-cd <your-project>
-deepx
+cd <your-project>   # VS Code's integrated terminal is usually already at the project root
+deepx               # enter the interactive TUI
 ```
 
 **3. Configure**
@@ -79,6 +85,16 @@ deepx
 | Manual override | Edit `~/.deepx/model.yaml` directly to override `base_url` / `model` / `api_key` / `max_tokens` / `context_window` per role (flash/pro); flash and pro may even point at different providers. |
 | Skills       | Drop into `<workspace>/.deepx/skills/`, or reuse `~/.claude/skills/` etc. |
 | MCP          | Add via `/mcp-add` inside the TUI; list with `/mcp-list`.    |
+
+## ⚡ Non-interactive execution (`deepx exec`)
+
+When you'd rather not enter the full TUI and want to drop deepx into a script, use `deepx exec "<task>"`: it runs the task, prints the result straight to your terminal (stdout), then exits — result only, no intermediate noise.
+
+```bash
+deepx exec "Translate the feature list in README to English and write it to README.en.md"
+```
+
+Piping data in is also supported (`cat error.log | deepx exec "analyze this error"`). Configure your API key once via the interactive `deepx` first.
 
 ## 🧠 How It Works
 
