@@ -286,6 +286,10 @@ rm -f ~/.local/bin/deepx && rm -rf ~/.deepx
 # Windows: delete %LOCALAPPDATA%\Programs\deepx and %USERPROFILE%\.deepx
 ```
 
+## ⭐ Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=itmisx/deepx-code&type=Date)](https://star-history.com/#itmisx/deepx-code&Date)
+
 ## 📄 License
 
 [MIT](LICENSE) © 2026 itmisx

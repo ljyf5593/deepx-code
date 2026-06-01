@@ -286,6 +286,10 @@ rm -f ~/.local/bin/deepx && rm -rf ~/.deepx
 # Windows: %LOCALAPPDATA%\Programs\deepx 와 %USERPROFILE%\.deepx 삭제
 ```
 
+## ⭐ Star 추이
+
+[![Star History Chart](https://api.star-history.com/svg?repos=itmisx/deepx-code&type=Date)](https://star-history.com/#itmisx/deepx-code&Date)
+
 ## 📄 License
 
 [MIT](LICENSE) © 2026 itmisx
