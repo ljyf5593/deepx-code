@@ -29,6 +29,7 @@
 - **💾 무손실 세션 영속화** —— gob가 `tool_calls` / 도구 결과 / `reasoning_content`를 완전 보존해 재시작 후에도 매끄럽게 이어감. 윈도가 차면 자동 계층 압축.
 - **🔌 MCP + Skill 생태계** —— MCP 네이티브 지원. Claude의 skill 디렉터리와 호환되어 기존 skill을 그대로 재사용.
 - **🛡️ 검토 모드** —— 파일 쓰기 / Shell 실행은 기본적으로 사람의 확인을 요구.
+- **⚡ 비대화형 `exec` 모드** —— `deepx exec "작업"` 은 한 번 실행하고 결과를 바로 stdout으로 출력. 파이프로 입력하고, 출력을 리다이렉트하고, 스크립트 / CI / cron에 넣을 수 있어 **TUI에 들어갈 필요 없음**(아래 참조).
 
 ## 📊 Claude Code 비교
 
@@ -64,11 +65,16 @@ irm https://raw.githubusercontent.com/itmisx/deepx-code/main/scripts/install.ps1
 
 `~/.local/bin/deepx`에 설치됩니다. `deepx upgrade`로 언제든 업데이트.
 
-**2. 프로젝트로 이동해 실행**
+**2. 터미널에서 프로젝트로 이동해 실행**
+
+deepx는 **터미널 프로그램**입니다. 터미널을 열고 프로젝트로 `cd` 한 뒤 `deepx` 를 실행하면 대화형 UI로 들어갑니다.
+
+- 어떤 터미널이든 OK: macOS Terminal / iTerm2, Linux 터미널, Windows Terminal / PowerShell.
+- **VS Code 내장 터미널**도 추천(`Terminal → New Terminal`, 또는 `` Ctrl+` ``): 열려 있는 프로젝트 디렉터리에 이미 있어서 `deepx` 가 그 프로젝트를 대상으로 동작하고, 수정 사항이 에디터에 즉시 반영됩니다.
 
 ```bash
-cd <당신의 프로젝트>
-deepx
+cd <당신의 프로젝트>   # VS Code 내장 터미널이면 보통 이미 프로젝트 루트에 있음
+deepx                   # 대화형 TUI 진입
 ```
 
 **3. 설정**
@@ -79,6 +85,16 @@ deepx
 | 수동 재정의   | `~/.deepx/model.yaml`을 직접 편집해 role(flash/pro)별로 `base_url` / `model` / `api_key` / `max_tokens` / `context_window`를 재정의 가능. flash와 pro가 서로 다른 공급자를 가리킬 수도 있음. |
 | Skill         | `<워크스페이스>/.deepx/skills/`에 두거나 `~/.claude/skills/` 등 재사용. |
 | MCP           | TUI에서 `/mcp-add`로 추가, `/mcp-list`로 목록 확인.          |
+
+## ⚡ 비대화형 실행（`deepx exec`）
+
+전체 TUI에 들어가지 않고 deepx를 스크립트에 넣고 싶을 때는 `deepx exec "<작업>"` 을 사용하세요. 작업을 실행하고 결과를 그대로 터미널(stdout)에 출력한 뒤 종료합니다. 결과만 나오고 중간 과정은 표시되지 않습니다.
+
+```bash
+deepx exec "README의 기능 목록을 영어로 번역해 README.en.md에 작성"
+```
+
+파이프 입력도 지원합니다(`cat error.log | deepx exec "이 에러를 분석해줘"`). 먼저 대화형 `deepx`로 API 키를 설정해 두세요.
 
 ## 🧠 동작 원리
 

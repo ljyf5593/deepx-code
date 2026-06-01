@@ -29,6 +29,7 @@
 - **💾 无损会话持久化** —— gob 完整保留 `tool_calls` / `tool results` / `reasoning_content`，重启无缝续接；超窗自动分层压缩。
 - **🔌 MCP + Skill 生态** —— 原生 MCP；兼容 Claude 的 skill 目录，已有 skill 直接复用。
 - **🛡️ 审核模式** —— 写文件 / 执行 Shell 默认需人工确认，安全可控。
+- **⚡ 非交互 `exec` 模式** —— `deepx exec "任务"` 一次性跑完直接把结果打到 stdout，支持管道喂数据、重定向输出、塞进脚本 / CI / cron，**不必进 TUI**（用法见下方「非交互执行」一节）。
 
 ## 📊 对比 Claude Code
 
@@ -64,11 +65,16 @@ irm https://raw.githubusercontent.com/itmisx/deepx-code/main/scripts/install.ps1
 
 安装到 `~/.local/bin/deepx`，随时用 `deepx upgrade` 升级。
 
-**2. 进入项目并启动**
+**2. 在终端里进入项目并启动**
+
+deepx 是个**终端程序**:打开一个终端,`cd` 进你的项目目录,运行 `deepx` 即可进入交互式界面。
+
+- 任何终端都行:macOS 自带 Terminal / iTerm2、Linux 终端、Windows Terminal / PowerShell。
+- 也推荐 **VS Code 内置终端**(菜单 `Terminal → New Terminal`,或快捷键 `` Ctrl+` ``):它默认就在当前打开的工程目录,`deepx` 起来直接对着这个项目干活,改完文件 VS Code 里实时可见。
 
 ```bash
-cd <你的项目目录>
-deepx
+cd <你的项目目录>   # VS Code 内置终端通常已经在项目根,可跳过
+deepx               # 进入交互式 TUI
 ```
 
 **3. 配置**
@@ -79,6 +85,16 @@ deepx
 | 手动覆盖    | 可直接编辑 `~/.deepx/model.yaml`，按 role（flash/pro）覆盖 `base_url` / `model` / `api_key` / `max_tokens` / `context_window`；flash 与 pro 也可指向不同供应商。 |
 | Skill       | 放到 `<工作区>/.deepx/skills/`，或复用 `~/.claude/skills/` 等已有目录。 |
 | MCP         | TUI 内 `/mcp-add` 添加，`/mcp-list` 查看。                    |
+
+## ⚡ 非交互执行（`deepx exec`）
+
+不想进全屏 TUI、想把 deepx 塞进脚本时,用 `deepx exec "<任务>"`:跑完把结果直接打到终端(stdout)再退出,只输出结果、不显示中间过程。
+
+```bash
+deepx exec "把 README 的功能列表翻译成英文,写到 README.en.md"
+```
+
+也支持管道喂数据(`cat error.log | deepx exec "分析这段报错"`)。需先用交互式 `deepx` 配好 API key。
 
 ## 🧠 核心机制
 
