@@ -50,6 +50,90 @@ const inputGutterWidth = 2
 // inputPromptStyle 是 gutter 里 "❱ " 的样式(粉紫加粗,同 banner 主色)。
 var inputPromptStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("99")).Bold(true)
 
+// scrollbarWidth 是 chat 区最右侧留给竖向滚动条的列宽。
+const scrollbarWidth = 1
+
+var (
+	scrollbarThumbStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("244")) // 滑块
+	scrollbarTrackStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("237")) // 轨道(暗)
+)
+
+// renderScrollbar 返回 height 行、每行 1 列的竖向滚动条,滑块大小/位置反映 chat viewport 的滚动状态。
+// 内容不溢出(总行数 ≤ 可见行)时整列留空,布局宽度保持不变。
+func (m model) renderScrollbar(height int) []string {
+	cells := make([]string, height)
+	if height <= 0 {
+		return cells
+	}
+	total := m.chatViewport.TotalLineCount()
+	visible := m.chatViewport.Height()
+	if total <= visible || visible <= 0 {
+		for i := range cells {
+			cells[i] = " "
+		}
+		return cells
+	}
+	thumb := height * visible / total
+	if thumb < 1 {
+		thumb = 1
+	}
+	if thumb > height {
+		thumb = height
+	}
+	maxOff := total - visible
+	yoff := m.chatViewport.YOffset()
+	if yoff < 0 {
+		yoff = 0
+	}
+	if yoff > maxOff {
+		yoff = maxOff
+	}
+	pos := 0
+	if maxOff > 0 {
+		pos = yoff * (height - thumb) / maxOff
+	}
+	if pos > height-thumb {
+		pos = height - thumb
+	}
+	for i := 0; i < height; i++ {
+		if i >= pos && i < pos+thumb {
+			cells[i] = scrollbarThumbStyle.Render("█")
+		} else {
+			cells[i] = scrollbarTrackStyle.Render("░")
+		}
+	}
+	return cells
+}
+
+// scrollChatToTrackRow 把滚动条轨道上的第 row 行(光标 Y - chatTop)映射成 chat 的滚动偏移并应用。
+// trackH 是轨道高度(= 可视行数)。滑块中心贴着光标;越界自动钳到 [0, maxOff]。内容不溢出则什么都不做。
+func (m *model) scrollChatToTrackRow(row, trackH int) {
+	total := m.chatViewport.TotalLineCount()
+	visible := m.chatViewport.Height()
+	if total <= visible || visible <= 0 || trackH <= 0 {
+		return
+	}
+	thumb := trackH * visible / total
+	if thumb < 1 {
+		thumb = 1
+	}
+	if thumb > trackH {
+		thumb = trackH
+	}
+	maxOff := total - visible
+	target := maxOff
+	if denom := trackH - thumb; denom > 0 {
+		target = (row - thumb/2) * maxOff / denom // 滑块中心对齐光标
+	}
+	if target < 0 {
+		target = 0
+	}
+	if target > maxOff {
+		target = maxOff
+	}
+	m.chatViewport.SetYOffset(target)
+}
+
 // layout 计算 chat viewport 的宽度与高度。
 // 总体结构:
 //
@@ -102,16 +186,25 @@ func (m model) View() tea.View {
 		bodyH = 1
 	}
 
-	// chat 区:pad/截到精确 leftW × bodyH。
-	chatPadded := padLinesToWidth(m.chatViewport.View(), leftW)
+	// chat 区:内容占 leftW-scrollbarWidth,最右一列留给滚动条,合计精确 leftW × bodyH。
+	contentW := leftW - scrollbarWidth
+	if contentW < 1 {
+		contentW = 1
+	}
+	chatPadded := padLinesToWidth(m.chatViewport.View(), contentW)
 	chatLines := strings.Split(chatPadded, "\n")
 	for len(chatLines) < bodyH {
-		chatLines = append(chatLines, strings.Repeat(" ", leftW))
+		chatLines = append(chatLines, strings.Repeat(" ", contentW))
 	}
 	if len(chatLines) > bodyH {
 		// 仅当排队区压缩了 body 时才会溢出(viewport 自身高度=无排队时的 bodyH)。
 		// 留"尾部"而非头部:流式时 viewport 贴底,最新输出在末尾,要保证它不被排队区盖掉。
 		chatLines = chatLines[len(chatLines)-bodyH:]
+	}
+	// 最右列拼上滚动条,使每行恢复 leftW 宽。
+	bar := m.renderScrollbar(bodyH)
+	for i := range chatLines {
+		chatLines[i] += bar[i]
 	}
 
 	// 右栏:status section 区,固定 rightW × bodyH。

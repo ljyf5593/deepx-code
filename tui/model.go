@@ -140,6 +140,9 @@ type model struct {
 	inputDragging                    bool
 	inputDragStartX, inputDragStartY int
 
+	// scrollbarDragging 表示左键正按在 chat 滚动条上拖动:MouseMotion 时把光标 Y 映射成滚动偏移。
+	scrollbarDragging bool
+
 	// copyHint 复制成功后的临时提示("✓ 已复制"),叠在鼠标松开的位置 (copyHintX/Y),
 	// 1.5s 后由 copyHintClearMsg 清空。空串 = 不显示。
 	copyHint  string
@@ -702,7 +705,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		leftW, vpH := m.layout()
-		m.chatViewport.SetWidth(leftW)
+		m.chatViewport.SetWidth(leftW - scrollbarWidth)
 		m.chatViewport.SetHeight(vpH)
 		// 输入区 = 左侧固定 gutter("> ")+ 右侧 textarea。textarea 占整宽 m.width-gutter
 		//(分隔线只到 body 底,输入区横跨整行)。gutter 由 view.go 单独画。
@@ -733,11 +736,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		leftW, vpH := m.layout()
-		// chat 区:X 从 0 起,Y 从 0 起(无顶栏);chatRight 由 layout() 算的 leftW 决定。
+		// chat 区:X 从 0 起,Y 从 0 起(无顶栏)。最右 scrollbarWidth 列是滚动条,内容列到 scrollbarX 为止。
 		chatLeft, chatTop := 0, 0
-		chatRight := chatLeft + leftW
+		scrollbarX := leftW - scrollbarWidth
 		chatBottom := chatTop + vpH
-		inChat := msg.X >= chatLeft && msg.X < chatRight &&
+
+		// 先判滚动条:命中那一列就进入拖拽态并按 Y 滚动,return —— 不落到选区逻辑,绝不影响拖拽选中。
+		if msg.X >= scrollbarX && msg.X < leftW && msg.Y >= chatTop && msg.Y < chatBottom {
+			m.scrollbarDragging = true
+			m.scrollChatToTrackRow(msg.Y-chatTop, vpH)
+			return m, nil
+		}
+
+		// 选区只认内容列 [chatLeft, scrollbarX),滚动条列被上面截走,二者按 X 互斥。
+		inChat := msg.X >= chatLeft && msg.X < scrollbarX &&
 			msg.Y >= chatTop && msg.Y < chatBottom
 		// 输入区:body 下方整块(空白行 + textarea 行),Y ∈ [vpH, m.height)。
 		inInput := msg.Y >= vpH && msg.Y < m.height && msg.X >= 0 && msg.X < m.width
@@ -775,10 +787,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		leftW, vpH := m.layout()
-		// chat 区:X 从 0 起,Y 从 0 起(无顶栏);chatRight 由 layout() 算的 leftW 决定。
+		// chat 区:X 从 0 起,Y 从 0 起(无顶栏)。内容列到 scrollbarX 为止,最右是滚动条。
 		chatLeft, chatTop := 0, 0
-		chatRight := chatLeft + leftW
+		chatRight := chatLeft + leftW - scrollbarWidth // 选区夹取到内容列,不含滚动条
 		chatBottom := chatTop + vpH
+
+		// 滚动条拖拽优先:正按在滚动条上 → 按光标 Y 滚动,return,不进选区逻辑。
+		if m.scrollbarDragging {
+			m.scrollChatToTrackRow(msg.Y-chatTop, vpH)
+			return m, nil
+		}
 
 		// 输入框拖拽全选:必须是"真拖动"——横向移过 inputDragThreshold 格,或换了行——才整段选高亮。
 		// 这样双击/点击时一两格的抖动不会被误判成拖拽。输入框内容通常一行/几行,够阈值就直接整段选。
@@ -832,6 +850,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if msg.Button != tea.MouseLeft {
+			return m, nil
+		}
+		// 滚动条拖拽松手:仅清除拖拽态,不做别的(不影响选区复制等)。
+		if m.scrollbarDragging {
+			m.scrollbarDragging = false
 			return m, nil
 		}
 		// 输入框拖拽全选松手:复制整段输入框内容(不弹"已复制"提示)。
@@ -1206,6 +1229,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.input.SetValue("")
 				m.commandPaletteIdx = 0
 				return m, m.handleSlashCommand(chosen)
+			case "esc":
+				// 取消:清掉正在敲的 "/命令",面板随 value 清空而消失。
+				m.input.SetValue("")
+				m.attachedImagePaths = nil
+				m.commandPaletteIdx = 0
+				return m, nil
 			}
 		} else {
 			// palette 没在显示,idx 复位避免下次打开时停在过去位置
