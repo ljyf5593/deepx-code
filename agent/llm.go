@@ -133,17 +133,22 @@ func (m ChatMessage) MarshalJSON() ([]byte, error) {
 	type wire struct {
 		Role             string     `json:"role"`
 		Content          any        `json:"content,omitempty"`
-		ReasoningContent string     `json:"reasoning_content,omitempty"`
+		ReasoningContent any        `json:"reasoning_content,omitempty"`
 		ToolCalls        []ToolCall `json:"tool_calls,omitempty"`
 		ToolCallID       string     `json:"tool_call_id,omitempty"`
 		Name             string     `json:"name,omitempty"`
 	}
 	w := wire{
-		Role:             m.Role,
-		ReasoningContent: m.ReasoningContent,
-		ToolCalls:        m.ToolCalls,
-		ToolCallID:       m.ToolCallID,
-		Name:             m.Name,
+		Role:       m.Role,
+		ToolCalls:  m.ToolCalls,
+		ToolCallID: m.ToolCallID,
+		Name:       m.Name,
+	}
+	switch {
+	case m.ReasoningContent != "":
+		w.ReasoningContent = m.ReasoningContent
+	case m.Role == "assistant":
+		w.ReasoningContent = ""
 	}
 	switch {
 	case len(m.ContentParts) > 0:
@@ -539,9 +544,6 @@ func StartStream(
 			if ctx.Err() != nil {
 				return
 			}
-			// 不再主动 strip reasoning_content:本轮不切换模型,thinking 模型仍按需回传,
-			// 非 thinking 模型对 history 里的字段视而不见。若个别模型报错,
-			// streamOnce 仍有 errReasoningRequired retry 兜底。
 			// 按本轮模型支不支持视觉,即时把带图消息渲染成 base64 或 路径+OCR(见 renderConvoImages)。
 			// 只渲染发出去的副本,convo 规范形态(只存路径)不变。
 			assistantContent, reasoning, toolCalls, usage, err := streamOnce(

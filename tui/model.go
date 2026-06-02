@@ -27,7 +27,6 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-// imagePlaceholderRe 匹配输入框里 [Image #N] 形式的图片占位符。
 var imagePlaceholderRe = regexp.MustCompile(`\[Image #(\d+)\]`)
 
 // inputDragThreshold 是触发"输入框拖拽全选"所需的最小横向移动格数。
@@ -601,7 +600,6 @@ func (m model) submitUserInput(input string) (model, tea.Cmd) {
 	}
 
 	userMsg := m.buildUserMessage(input)
-	// 聊天窗口里仍显示用户输入的原文(含占位符),路径替换只发生在发给 LLM 的消息体中。
 	m.appendChat("You", input)
 	m.history = append(m.history, userMsg)
 	// 用户输入先暂存,本轮成功后(StreamDoneMsg)才写 jsonl —— 失败的轮次不留孤儿记录。
@@ -1381,8 +1379,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.input.InsertRune('\n')
 			return m, nil
 		case "ctrl+v":
-			// 先看剪贴板有没有图,有就落盘 + 把 [Image #N] 占位符插到输入框光标处。
-			// 没图则继续下落到 textinput,走文本粘贴。
+			// 剪贴板有图就落盘并插入到输入框;没图则下落到 textinput 走文本粘贴。
 			if data, err := readClipboardImage(); err == nil {
 				path, err := saveAttachedImage(data, len(m.attachedImagePaths)+1)
 				if err != nil {
@@ -1850,12 +1847,7 @@ func (m *model) syncFileMention() {
 	}
 }
 
-// buildUserMessage 把输入文本中的占位符 / 引用替换成 LLM 可用的形式:
-//   - [Image #N] → 已落盘图片的绝对路径(模型用 img_ocr 按路径识别)
-//   - @相对路径   → 反引号包裹的相对路径(指向真实文件时;模型按需调 Read 读取,设计 B)
-//
-// 图片在 Ctrl+V 时落盘到 ~/.deepx/ocr/cache/<ts>-<N>.png;这里只做文本替换,不产出多模态 ContentParts。
-// 聊天窗口仍显示用户原文(含 [Image #N] / @路径),替换只发生在发给 LLM 的消息体。
+// buildUserMessage 构造发给 LLM 的用户消息:解析 @ 文件引用,并附带已落盘图片的路径。
 func (m model) buildUserMessage(text string) agent.ChatMessage {
 	if wd, err := os.Getwd(); err == nil {
 		text = resolveFileMentions(text, wd)
@@ -1863,9 +1855,6 @@ func (m model) buildUserMessage(text string) agent.ChatMessage {
 	if len(m.attachedImagePaths) == 0 {
 		return agent.ChatMessage{Role: "user", Content: text}
 	}
-	// 有图:消息只携带"文本(含 [Image #N] 占位符)+ 图片路径",**不在这里决定 base64 还是 OCR**。
-	// 具体怎么发(视觉模型 base64 / 非视觉模型路径+OCR)由 agent 发请求前按"当轮实际模型"渲染
-	// (见 agent.renderConvoImages)—— 这样模型中途切换也能正确降级,且历史只存路径不存 base64。
 	return agent.ChatMessage{
 		Role:       "user",
 		Content:    text,
@@ -1893,9 +1882,7 @@ func saveAttachedImage(data []byte, index int) (string, error) {
 	return path, nil
 }
 
-// insertImagePlaceholder 在输入框当前光标位置插入 [Image #n]。
-// textarea 自带 InsertString,前后补一个空格直接交给它处理光标——简化版,
-// 不再判断光标两侧字符。多一两个空格无碍 LLM 解析。
+// insertImagePlaceholder 在输入框当前光标位置插入第 n 张图的引用。
 func (m *model) insertImagePlaceholder(n int) {
 	m.input.InsertString(fmt.Sprintf(" [Image #%d] ", n))
 }
@@ -1939,9 +1926,7 @@ func (m *model) appendChat(role, text string) {
 //   - system: 跳过
 //
 // 不写 m.history、不写 session.gob —— 仅是显示通道,改这里不影响 LLM 缓存。
-// chatDisplayText 取一条消息用于"对话区显示"的文本:优先用 Content(新格式:文本含 [Image #N]);
-// 若 Content 为空(老格式:base64 直接内联在 ContentParts 里),则从 ContentParts 拼出文本、
-// 用 [图片] 占位图片 —— 避免老 gob 重新加载时这条消息显示成空白。
+// chatDisplayText 取一条消息用于"对话区显示"的文本:优先 Content,否则从 ContentParts 拼出文本、图片用 [图片] 表示。
 func chatDisplayText(msg agent.ChatMessage) string {
 	if msg.Content != "" {
 		return msg.Content
