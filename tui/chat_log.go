@@ -4,10 +4,11 @@ import "strings"
 
 // maxChatBytes 是 chat 显示缓冲的字节预算(只控制显示用 raw,不影响 m.history)。
 // 超过后从最旧的 segment 整段丢弃,保留尾部 segment(永不裁尾 — 当前轮内容必须留住)。
-// 16KB ≈ 5K 中文字符 / 16K ASCII 字符,约 3-5 屏滚动回看。
+// 32KB:编程场景工具输出/diff/ANSI 较占字节,32KB 比 16KB 多一倍回看范围;再大需注意流式
+// 每 token 会重渲全量(见 TokenMsg),缓冲过大会拖慢长回复。
 // 真正完整的上下文在 m.history(走 LLM)和 session.gob(走重启恢复),
 // 这里只管"你眼睛能滚回去看几屏",超出的旧消息按 rebuildChatFromHistory 的段粒度裁。
-const maxChatBytes = 16 * 1024
+const maxChatBytes = 32 * 1024
 
 // segment kind:决定渲染时套哪种色条 + 上下括号(╭ / │ / ╰)。
 // 不同 kind 之间通过 EnsureKind 切段,同 kind 连续写入归到一段(典型:连发多个 tool_call)。

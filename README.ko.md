@@ -217,6 +217,7 @@ CreatePlan
 | `/reasoning`                         | role(flash/pro)별로 `thinking` / `reasoning_effort` 설정 팝업; 빈 값 = 해당 필드 미전송(MiMo 등 미지원 모델에 영향 없음) |
 | `/compact`                           | 세션 수동 압축                      |
 | `/new` `/sessions`                   | 새 대화 시작 / 기록 목록(↑↓ 선택, Enter 전환) |
+| `/status`                            | 오른쪽 상태 패널 표시/숨김(`Ctrl+B` 도 가능) |
 | `/lang`                              | UI 언어 전환(중 / 영)               |
 | `/mcp-list` `/mcp-add` `/mcp-delete` | MCP 서버 관리                       |
 | `/skills` `/config` `/mode`          | skill 목록 / key 재설정 / 모드 표시 |

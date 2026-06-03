@@ -138,9 +138,12 @@ func (m *model) scrollChatToTrackRow(row, trackH int) {
 //	vpH = m.height - inputAreaHeight
 //	leftW = m.width - rightPanelWidth - 1
 func (m model) layout() (leftW, vpH int) {
-	rightW := rightPanelWidth
-	if rightW > m.width/2 {
-		rightW = m.width / 2
+	rightW := 0 // 隐藏状态栏 → rightW=0 → chat 整宽(仅留最右列给滚动条)
+	if !m.hideStatusPanel {
+		rightW = rightPanelWidth
+		if rightW > m.width/2 {
+			rightW = m.width / 2
+		}
 	}
 	leftW = m.width - rightW - 1
 	if leftW < 1 {
@@ -158,11 +161,14 @@ func (m model) View() tea.View {
 		return m.wrapView(T("misc.terminal_too_small"))
 	}
 
-	rightW := rightPanelWidth
-	if rightW > m.width/2 {
-		rightW = m.width / 2
+	rightW := 0 // 隐藏状态栏时 rightW=0 → chat 铺满整宽(仅留最右一列给滚动条/分隔线)
+	if !m.hideStatusPanel {
+		rightW = rightPanelWidth
+		if rightW > m.width/2 {
+			rightW = m.width / 2
+		}
 	}
-	leftW := m.width - rightW - 1 // 1 = 竖分隔线
+	leftW := m.width - rightW - 1 // -1 = 竖分隔线/滚动条列
 	if leftW < 1 {
 		leftW = 1
 	}
@@ -194,18 +200,21 @@ func (m model) View() tea.View {
 		chatLines = chatLines[len(chatLines)-bodyH:]
 	}
 
-	// 右栏:status section 区,固定 rightW × bodyH。
-	right := lipgloss.NewStyle().
-		Width(rightW).
-		Height(bodyH).
-		Padding(0, 1).
-		Render(m.rightPanelView())
-	rightLines := strings.Split(right, "\n")
-	for len(rightLines) < bodyH {
-		rightLines = append(rightLines, strings.Repeat(" ", rightW))
-	}
-	if len(rightLines) > bodyH {
-		rightLines = rightLines[:bodyH]
+	// 右栏:status section 区,固定 rightW × bodyH。隐藏时全空行(不渲染状态栏)。
+	rightLines := make([]string, bodyH)
+	if !m.hideStatusPanel {
+		right := lipgloss.NewStyle().
+			Width(rightW).
+			Height(bodyH).
+			Padding(0, 1).
+			Render(m.rightPanelView())
+		rightLines = strings.Split(right, "\n")
+		for len(rightLines) < bodyH {
+			rightLines = append(rightLines, strings.Repeat(" ", rightW))
+		}
+		if len(rightLines) > bodyH {
+			rightLines = rightLines[:bodyH]
+		}
 	}
 
 	// 手动逐行拼接:chat_line + │ + right_line。

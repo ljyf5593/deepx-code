@@ -119,6 +119,18 @@ func (m *model) maybeSetConvTitle(userText string) {
 	m.session.SetConvTitle(truncTitle(t, 40))
 }
 
+// toggleStatusPanel 显隐右侧状态栏并记忆到 meta。chat 宽度随之变化,需重设 viewport 宽度、
+// 重排内容并清掉选区(选区坐标按旧宽算的)。
+func (m *model) toggleStatusPanel() {
+	m.hideStatusPanel = !m.hideStatusPanel
+	metaUpdate(func(mm *meta) { mm.HideStatus = m.hideStatusPanel })
+	leftW, vpH := m.layout()
+	m.chatViewport.SetWidth(leftW)
+	m.chatViewport.SetHeight(vpH)
+	m.selecting = false
+	m.refreshViewport()
+}
+
 // firstUserText 取历史里第一条用户消息的显示文本(用作对话标题)。没有则空串。
 func firstUserText(history []agent.ChatMessage) string {
 	for _, msg := range history {

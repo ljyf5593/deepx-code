@@ -22,6 +22,9 @@ type meta struct {
 	// 未命中才发一次最小探测(agent.ProbeVision),结果写回这里,下次启动直接命中。
 	// 能力按维度拆开(本期只做 vision,预留 video / audio),不用笼统的 multimodal。
 	ModelCaps map[string]modelCaps `json:"model_caps,omitempty"`
+
+	// HideStatus 记忆右侧状态栏的显隐选择(Ctrl+B / /status 切换),重启保持。
+	HideStatus bool `json:"hide_status,omitempty"`
 }
 
 // modelCaps 是单个模型探测出的能力位,按维度独立存。

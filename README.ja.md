@@ -217,6 +217,7 @@ CreatePlan
 | `/reasoning`                         | `thinking` / `reasoning_effort` をロール毎（flash/pro）に設定するポップアップ；空 = 該当フィールドを送信しない（MiMo など非対応モデルに無影響） |
 | `/compact`                           | セッションを手動圧縮                |
 | `/new` `/sessions`                   | 新しい会話を開始 / 履歴一覧（↑↓ 選択、Enter で切替） |
+| `/status`                            | 右側ステータス欄の表示/非表示（`Ctrl+B` でも可） |
 | `/lang`                              | UI 言語切替（中 / 英）              |
 | `/mcp-list` `/mcp-add` `/mcp-delete` | MCP サーバー管理                    |
 | `/skills` `/config` `/mode`          | skill 一覧 / key 再設定 / モード表示 |

@@ -238,6 +238,9 @@ type model struct {
 	sessionConvs    []session.ConvInfo
 	sessionListIdx  int
 
+	// hideStatusPanel:隐藏右侧状态栏,chat 铺满整宽(Ctrl+B / /status 切换,记忆到 meta)。
+	hideStatusPanel bool
+
 	// 版本信息。version 是 build 时注入的当前版本号(go build 默认 "dev")。
 	// latestVersion 是异步检查得到的 GitHub latest release,空则没检查到 / 网络失败。
 	// upgradeAvailable 由 versionNewer(latestVersion, version) 算出,渲染时用来决定是否
@@ -411,6 +414,7 @@ func initialModel(models agent.ModelConfig, needsSetup bool, version string, hub
 		version:         version,
 		mode:            agent.AgentMode_Auto,
 		status:          "idle",
+		hideStatusPanel: metaGet().HideStatus, // 记忆上次的状态栏显隐
 		spinner:         sp,
 		workspace:       wd,
 		setupInput:      si,
@@ -1446,6 +1450,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.input.InsertRune('\n')
 			return m, nil
+		case "ctrl+b":
+			// 显示/隐藏右侧状态栏(chat 铺满整宽);记忆到 meta。
+			m.toggleStatusPanel()
+			return m, nil
 		case "ctrl+v":
 			// 剪贴板有图就落盘并插入到输入框;没图则下落到 textinput 走文本粘贴。
 			if data, err := readClipboardImage(); err == nil {
@@ -2126,6 +2134,8 @@ func (m *model) handleSlashCommand(input string) tea.Cmd {
 		}
 	case "/compact":
 		return m.startManualCompaction()
+	case "/status":
+		m.toggleStatusPanel()
 	case "/new":
 		m.startNewConversation()
 	case "/sessions":

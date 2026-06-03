@@ -217,6 +217,7 @@ A built-in symbol-graph engine lets the model do symbol-level navigation + call-
 | `/reasoning`                         | popup to set `thinking` / `reasoning_effort` per role (flash/pro); empty = don't send the field (safe for MiMo and other models that don't support it) |
 | `/compact`                           | manually compact the session        |
 | `/new` `/sessions`                   | start a new conversation / browse history (↑↓ select, Enter switch) |
+| `/status`                            | show/hide the right status panel (or press `Ctrl+B`) |
 | `/lang`                              | switch UI language (zh / en)        |
 | `/mcp-list` `/mcp-add` `/mcp-delete` | manage MCP servers                  |
 | `/skills` `/config` `/mode`          | list skills / reconfigure key / show mode |
