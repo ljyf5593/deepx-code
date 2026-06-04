@@ -782,6 +782,21 @@ func (m model) rightPanelView() string {
 			lipgloss.NewStyle().Foreground(codegraphColor(cgState)).Render(T("codegraph."+cgState)),
 		label(T("panel.label.cgcalls")) + " " + strconv.Itoa(tools.CodeGraphCalls()),
 	})...)
+	// 沙箱:显示当前模式 + native 的保护级别(OS 隔离 / 软策略),让用户清楚当前的边界强度。
+	sbDesc := string(tools.CurrentSandboxMode())
+	switch tools.CurrentSandboxMode() {
+	case tools.SandboxOff:
+		sbDesc += " (无防护)"
+	case tools.SandboxNative:
+		if tools.NativeIsolationActive() {
+			sbDesc += " (OS隔离)"
+		} else {
+			sbDesc += " (软策略)"
+		}
+	}
+	rows = append(rows, section(T("panel.sandbox"), []string{
+		label(T("panel.label.sbmode")) + " " + sbDesc,
+	})...)
 	// 规划进度:始终显示(无规划时 0/0)。完整 plan 树在 chat 区展示,右栏只放摘要。
 	rows = append(rows, section(T("panel.plan"), renderPlanSummary(m.plan, rightPanelWidth-4))...)
 	rows = append(rows, section(T("panel.commands"), []string{

@@ -5,7 +5,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"runtime"
 	"strings"
 	"time"
 )
@@ -87,6 +86,10 @@ func RunCommand(args map[string]any) ToolResult {
 	if strings.TrimSpace(command) == "" {
 		return ToolResult{Output: "错误: command 参数为空", Success: false}
 	}
+	// 沙箱预检(前台/后台同一入口,这里一处覆盖):当前模式策略不放行就拒掉,不执行。
+	if err := SandboxCheck(command); err != nil {
+		return ToolResult{Output: "🛡️ " + err.Error(), Success: false}
+	}
 	cwd, _ := args["cwd"].(string)
 
 	// 模型显式 run_in_background=true:直接走后台路径。
@@ -109,14 +112,9 @@ func RunCommand(args map[string]any) ToolResult {
 //
 // 关键设计:auto-bg 路径**不杀进程**,只换管理模式;模型拿到 id 继续推进。
 func runForegroundWithAutoHandoff(command, cwd string, timeoutSec int) ToolResult {
-	var cmd *exec.Cmd
-	if runtime.GOOS == "windows" {
-		cmd = exec.Command("cmd", "/C", command)
-	} else {
-		cmd = exec.Command("sh", "-c", command)
-	}
-	if cwd != "" {
-		cmd.Dir = cwd
+	cmd, err := sandboxCmd(command, cwd) // native=本地 shell;docker=容器内 exec
+	if err != nil {
+		return ToolResult{Output: "🛡️ 沙箱启动失败: " + err.Error(), Success: false}
 	}
 	setPgid(cmd) // 进程组化:auto-bg 后 KillBash 能整族杀;timeout 路径也能整族杀。
 

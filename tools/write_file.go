@@ -18,9 +18,9 @@ func WriteFile(args map[string]any) ToolResult {
 	}
 	content, _ := args["content"].(string)
 
-	absPath, err := filepath.Abs(path)
+	absPath, err := confineToWorkspace(path)
 	if err != nil {
-		return ToolResult{Output: fmt.Sprintf("路径错误: %v", err), Success: false}
+		return ToolResult{Output: err.Error(), Success: false}
 	}
 	if err := os.MkdirAll(filepath.Dir(absPath), 0o755); err != nil {
 		return ToolResult{Output: fmt.Sprintf("创建父目录失败: %v", err), Success: false}

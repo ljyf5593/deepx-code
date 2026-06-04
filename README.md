@@ -225,6 +225,7 @@ CreatePlan
 | `/compact`                 | 手动压缩会话以节省上下文          |
 | `/new` `/sessions`         | 开启全新对话 / 历史对话列表（↑↓ 选，Enter 切换） |
 | `/status`                  | 显示/隐藏右侧状态栏（也可按 `Ctrl+B`） |
+| `/sandbox`                 | 沙箱模式：`off`（关闭）/ `native`（默认，OS 隔离：macOS Seatbelt、Linux bubblewrap，写操作限定在 workspace + 进程隔离；无 OS 机制的平台退回软策略黑名单）/ `docker`（容器隔离，`/sandbox docker <镜像>`） |
 | `/lang`                    | 切换界面语言（中 / 英）           |
 | `/mcp-list` `/mcp-add` `/mcp-delete` | 管理 MCP server         |
 | `/skills` `/config` `/mode`| 列出 skill / 重配 key / 查看模式  |

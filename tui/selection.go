@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"os"
 	"strings"
 	"time"
 
@@ -130,16 +131,41 @@ func extractSelectionText(wrapped string, a, b cellPos, width int) string {
 	return strings.Join(out, "\n")
 }
 
-// copySelection 把当前选区文本双路写剪贴板:pbcopy(本地必中)+ OSC52(兼容更多终端 / SSH)。
-// 同时弹一个"已复制"临时提示。选区为空返回 nil。
+// copySelection 把当前选区文本写进剪贴板,并弹一个"已复制"临时提示。选区为空返回 nil。
+//
+// 本地优先用原生剪贴板(pbcopy/xclip/clip.exe),**不再叠加 OSC52**:
+// OSC52 的 payload 是 base64 字节,部分终端(如 VS Code 的 xterm.js)把它按 Latin-1 解码,
+// 中文会变乱码;若 pbcopy 之后再发 OSC52,反把干净结果覆盖成乱码。
+// OSC52 只在两种情况下用:① 远程会话(SSH,本地剪贴板工具写的是远端,没用,只能靠 OSC52 转发);
+// ② 原生写入失败(没装 xclip / 无 DISPLAY 等)兜底。
 func (m *model) copySelection() tea.Cmd {
 	text := m.collectSelectionText()
 	if text == "" {
 		return nil
 	}
-	_ = writeClipboardText(text)
 	m.copyHint = T("copy.done")
-	return tea.Batch(tea.SetClipboard(text), clearCopyHintCmd())
+	return tea.Batch(clipboardWriteCmd(text), clearCopyHintCmd())
+}
+
+// clipboardWriteCmd 把 text 写进剪贴板,并返回 Update 里待执行的 tea.Cmd:
+//   - 本地会话:用原生剪贴板(pbcopy/xclip/clip.exe),成功则返回 nil(不发 OSC52);
+//   - 远程(SSH)或原生写入失败:退回 OSC52(tea.SetClipboard)。
+//
+// 之所以本地不发 OSC52:它的 payload 是 base64 字节,部分终端(如 VS Code 的 xterm.js)
+// 按 Latin-1 解码,中文会变乱码;叠在 pbcopy 之后还会把干净结果覆盖掉。
+func clipboardWriteCmd(text string) tea.Cmd {
+	if isRemoteSession() {
+		return tea.SetClipboard(text)
+	}
+	if err := writeClipboardText(text); err != nil {
+		return tea.SetClipboard(text)
+	}
+	return nil
+}
+
+// isRemoteSession 判断是否在 SSH 远程会话里(此时本地剪贴板工具写的是远端剪贴板,需靠 OSC52 转发)。
+func isRemoteSession() bool {
+	return os.Getenv("SSH_CONNECTION") != "" || os.Getenv("SSH_TTY") != ""
 }
 
 // copyHintClearMsg 到达时清掉"已复制"提示。

@@ -3,7 +3,6 @@ package tools
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 )
 
@@ -30,9 +29,9 @@ func EditFile(args map[string]any) ToolResult {
 	}
 	replaceAll, _ := args["replace_all"].(bool)
 
-	absPath, err := filepath.Abs(path)
+	absPath, err := confineToWorkspace(path)
 	if err != nil {
-		return ToolResult{Output: fmt.Sprintf("路径错误: %v", err), Success: false}
+		return ToolResult{Output: err.Error(), Success: false}
 	}
 	data, err := os.ReadFile(absPath)
 	if err != nil {

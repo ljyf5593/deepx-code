@@ -2,6 +2,7 @@ package tui
 
 import (
 	"deepx/agent"
+	"deepx/tools"
 	"deepx/web"
 	"os"
 
@@ -52,6 +53,9 @@ func Run(models agent.ModelConfig, needsSetup bool, version string, webEnabled b
 		go func() { _ = srv.Serve() }()
 		defer srv.Close()
 	}
+
+	// 退出时清理 docker 沙箱容器(若起过)。native 模式无副作用,这步是 no-op。
+	defer tools.StopSandboxContainer()
 
 	_, err := p.Run()
 	return err

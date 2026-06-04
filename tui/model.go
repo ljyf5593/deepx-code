@@ -241,6 +241,13 @@ type model struct {
 	// hideStatusPanel:隐藏右侧状态栏,chat 铺满整宽(Ctrl+B / /status 切换,记忆到 meta)。
 	hideStatusPanel bool
 
+	// docker 沙箱镜像拉取进度(/sandbox docker 切换时,镜像不在本地才拉)。
+	dockerPulling    bool
+	dockerPullImage  string
+	dockerPullDone   int
+	dockerPullTotal  int
+	dockerPullCancel context.CancelFunc
+
 	// 版本信息。version 是 build 时注入的当前版本号(go build 默认 "dev")。
 	// latestVersion 是异步检查得到的 GitHub latest release,空则没检查到 / 网络失败。
 	// upgradeAvailable 由 versionNewer(latestVersion, version) 算出,渲染时用来决定是否
@@ -386,6 +393,19 @@ func initialModel(models agent.ModelConfig, needsSetup bool, version string, hub
 
 	// 代码图谱:绑定到当前 workspace 根,懒构建(首次 CodeGraph 调用时才遍历解析)。
 	tools.SetCodeGraphRoot(wd)
+
+	// 沙箱:绑定 workspace(docker 挂载用)+ 恢复上次模式/镜像。docker 模式下首条命令惰性起容器;
+	// 若彼时 docker 不可用,EnsureDockerContainer 会给清晰错误,用户可 /sandbox native 切回。
+	tools.SetSandboxWorkspace(wd)
+	if mm := metaGet(); mm.SandboxDockerImage != "" {
+		tools.SetSandboxDockerImage(mm.SandboxDockerImage)
+	}
+	switch metaGet().Sandbox {
+	case string(tools.SandboxDocker):
+		tools.SetSandboxMode(tools.SandboxDocker)
+	case string(tools.SandboxOff):
+		tools.SetSandboxMode(tools.SandboxOff)
+	} // 其余(空 / native)走默认 native,无需设置
 
 	// MCP:后台连接 ~/.deepx/mcp.json 里配置的 server,连上后把它们的工具注入给 LLM。
 	// 失败只记状态、不影响启动;没配置则什么都不做。
@@ -881,14 +901,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.inputDragging = false
 			if m.inputAllSelected {
 				if text := m.input.Value(); text != "" {
-					_ = writeClipboardText(text)
-					return m, tea.SetClipboard(text)
+					return m, clipboardWriteCmd(text)
 				}
 			}
 			return m, nil
 		}
 		if m.selecting {
-			// 双路写剪贴板(对齐 crush):pbcopy 本地必中,OSC52 兼容更多终端 + 跨 SSH。
+			// 写剪贴板:本地原生优先、远程/失败才 OSC52(见 copySelection / clipboardWriteCmd)。
 			// 不清 selecting:保留高亮,直到用户点别处 / 滚轮 / 改尺寸 / 开始新选择。
 			if cmd := m.copySelection(); cmd != nil {
 				// 记下松开位置,"✓ 已复制"提示就叠在这里。
@@ -1411,6 +1430,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.refreshViewport()
 			return m, nil
 		case "esc":
+			// 正在拉 docker 镜像 → Esc 取消拉取,保持 native。
+			if m.dockerPulling {
+				if m.dockerPullCancel != nil {
+					m.dockerPullCancel()
+					m.dockerPullCancel = nil
+				}
+				m.dockerPulling = false
+				m.appendChat("System", T("sandbox.pull_canceled"))
+				m.refreshViewport()
+				return m, nil
+			}
 			// Esc 中断当前对话。取消 context 真正终止后台 HTTP 请求和工具调用,
 			// 然后 drain channel 防止 goroutine 阻塞。
 			if m.streaming && m.streamCh != nil {
@@ -1633,6 +1663,25 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// "已复制"提示到点清空(View 下一帧就不显示了)。
 		m.copyHint = ""
 		return m, nil
+
+	case dockerPullMsg:
+		if !m.dockerPulling {
+			return m, nil // 已被取消
+		}
+		if msg.p.Finished {
+			m.dockerPulling = false
+			m.dockerPullCancel = nil
+			if msg.p.Err != nil {
+				m.appendChat("System", fmt.Sprintf(T("sandbox.pull_failed"), msg.p.Err))
+			} else {
+				m.activateDockerSandbox(m.dockerPullImage) // 镜像就绪,正式切 docker
+			}
+			m.refreshViewport()
+			return m, nil
+		}
+		m.dockerPullDone, m.dockerPullTotal = msg.p.Done, msg.p.Layers
+		m.refreshViewport()
+		return m, listenDockerPull(msg.ch) // 续听下一条进度
 
 	case agent.HistoryUpdateMsg:
 		if m.streamCh == nil {
@@ -2082,6 +2131,9 @@ func (m *model) handleSlashCommand(input string) tea.Cmd {
 	if strings.HasPrefix(cmd, "/model") { // 带参数,单独解析
 		return m.handleModelCommand(cmd)
 	}
+	if strings.HasPrefix(cmd, "/sandbox") { // 带参数(native/docker [image]),传原文(镜像名别被小写化)
+		return m.handleSandboxCommand(input)
+	}
 	switch cmd {
 	case "/plan":
 		m.mode = agent.AgentMode_Plan
@@ -2185,6 +2237,76 @@ func (m *model) undoLastTurn() {
 	}
 	m.appendChat("System", T("undo.done"))
 	m.refreshViewport()
+}
+
+// activateDockerSandbox 正式切到 docker 沙箱:设模式 + 记忆 + 提示。镜像已就绪后调用。
+func (m *model) activateDockerSandbox(image string) {
+	tools.SetSandboxMode(tools.SandboxDocker)
+	metaUpdate(func(mm *meta) {
+		mm.Sandbox = string(tools.SandboxDocker)
+		mm.SandboxDockerImage = image
+	})
+	m.appendChat("assistant", fmt.Sprintf(T("sandbox.switched_docker"), image))
+}
+
+// handleSandboxCommand 处理 /sandbox [off|native|docker [image]]:
+// 无参 → 显示当前模式;off → 关闭沙箱;native → OS 隔离/软策略;docker [image] → 探测 Docker 后切容器。
+// input 是原始输入(未小写化),镜像名大小写敏感。
+func (m *model) handleSandboxCommand(input string) tea.Cmd {
+	// 去掉前缀 /sandbox(大小写不敏感),其余按空白切。
+	rest := strings.TrimSpace(input)
+	if i := strings.IndexAny(rest, " \t"); i >= 0 {
+		rest = strings.TrimSpace(rest[i:])
+	} else {
+		rest = ""
+	}
+	fields := strings.Fields(rest)
+	if len(fields) == 0 {
+		m.appendChat("assistant", fmt.Sprintf(T("sandbox.current"), tools.CurrentSandboxMode()))
+		return nil
+	}
+	switch strings.ToLower(fields[0]) {
+	case "off":
+		tools.SetSandboxMode(tools.SandboxOff)
+		metaUpdate(func(mm *meta) { mm.Sandbox = string(tools.SandboxOff) })
+		m.appendChat("assistant", T("sandbox.switched_off"))
+	case "native":
+		tools.SetSandboxMode(tools.SandboxNative)
+		metaUpdate(func(mm *meta) { mm.Sandbox = string(tools.SandboxNative) })
+		if tools.NativeIsolationActive() {
+			m.appendChat("assistant", T("sandbox.switched_native_os"))
+		} else {
+			m.appendChat("assistant", T("sandbox.switched_native_soft"))
+		}
+	case "docker":
+		if len(fields) >= 2 { // /sandbox docker <image>
+			tools.SetSandboxDockerImage(fields[1])
+		}
+		if err := tools.DockerAvailable(); err != nil {
+			m.appendChat("System", fmt.Sprintf(T("sandbox.docker_unavailable"), err))
+			return nil
+		}
+		image := tools.SandboxDockerImage()
+		if tools.ImagePresent(image) {
+			// 镜像已在本地 → 直接切,无需拉取/进度条
+			m.activateDockerSandbox(image)
+			return nil
+		}
+		// 镜像不在本地 → 异步拉取,对话区显示百分比进度条;拉完才正式切到 docker
+		if m.dockerPulling {
+			return nil // 已在拉,别重复
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		m.dockerPullCancel = cancel
+		m.dockerPulling = true
+		m.dockerPullImage = image
+		m.dockerPullDone, m.dockerPullTotal = 0, 0
+		m.refreshViewport()
+		return listenDockerPull(tools.PullImage(ctx, image))
+	default:
+		m.appendChat("assistant", fmt.Sprintf(T("sandbox.unknown"), fields[0]))
+	}
+	return nil
 }
 
 // handleModelCommand 处理 /model:无参数(或参数不认识)→ 弹窗选择;
@@ -2477,6 +2599,10 @@ func (m *model) renderChatBaseContent(w int) string {
 	// 否则 checkbox 列表会和流式 token 视觉上混在一起。
 	if m.plan != nil && m.streaming && !m.plan.allFinished() {
 		content += "\n" + indentBlock(renderPlanForChat(m.plan), "  ")
+	}
+	// docker 镜像拉取进度条:拉取期间挂在对话区末尾,随进度刷新;拉完即撤(dockerPulling 置回 false)。
+	if m.dockerPulling {
+		content += "\n" + dockerPullBar(m.dockerPullImage, m.dockerPullDone, m.dockerPullTotal)
 	}
 	// 思考动画不再画在 chat 末尾 —— 已统一移到输入框上方的活动状态行(statusFooterLine),
 	// 避免一次 thinking 出现在两个地方。

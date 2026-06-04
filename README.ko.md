@@ -218,6 +218,7 @@ CreatePlan
 | `/compact`                           | 세션 수동 압축                      |
 | `/new` `/sessions`                   | 새 대화 시작 / 기록 목록(↑↓ 선택, Enter 전환) |
 | `/status`                            | 오른쪽 상태 패널 표시/숨김(`Ctrl+B` 도 가능) |
+| `/sandbox`                           | 샌드박스: `off`(끄기) / `native`(기본, OS 격리: macOS Seatbelt, Linux bubblewrap — 쓰기를 workspace로 제한 + 프로세스 격리; OS 메커니즘이 없는 플랫폼은 소프트 정책 블랙리스트로 폴백) / `docker`(컨테이너 격리, `/sandbox docker <image>`) |
 | `/lang`                              | UI 언어 전환(중 / 영)               |
 | `/mcp-list` `/mcp-add` `/mcp-delete` | MCP 서버 관리                       |
 | `/skills` `/config` `/mode`          | skill 목록 / key 재설정 / 모드 표시 |
