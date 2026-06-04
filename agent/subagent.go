@@ -129,7 +129,7 @@ func runSubAgent(ctx context.Context, in subAgentInput) subAgentResult {
 		}
 		// 不主动 strip reasoning:本轮锁定模型,thinking 模型仍正常回传,
 		// 非 thinking 模型忽略 history 里的 reasoning_content 字段(omitempty 已处理空值)。
-		content, reasoning, toolCalls, _, err := streamOnce(
+		content, reasoning, toolCalls, _, _, err := streamOnce(
 			ctx,
 			in.Entry.APIKey, in.Entry.BaseURL, in.Entry.Model,
 			convo, in.Entry.MaxTokens, toolSpecs,

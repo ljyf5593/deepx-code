@@ -418,6 +418,7 @@ func coreSystemPrompt(workspace, skillCatalog string) string {
 # 任务规划
 - 简单/单步任务:直接做,不要过度规划。
 - 多步顺序任务(≥3 步且有先后,如从零搭应用 / 跨多文件改动 / 调试修复链路):动手前先用 Todo 列出全部步骤,之后每开始或完成一步就重发整张 todos 更新状态,让用户看到进度。你自己逐步执行,不派子 agent。
+- **别提前收尾**:任务没真正完成前(尤其 todo 里还有未完成项),不要只回一段总结就停下——继续调用工具推进到底。只在全部做完、或确实卡住需要用户提供信息时才结束。像"分析/梳理 XX 流程"这类调研任务,要把相关文件都查透、给出完整结论,不能查两三个文件就收。
 - 真正可并行、彼此独立的扇出任务才用 CreatePlan 拆 DAG(会派并发子 agent 各自跑);搭一个连贯的应用别用 CreatePlan。
 
 # Shell 安全
@@ -539,6 +540,11 @@ func StartStream(
 			ch <- PrefixSnapshotMsg{Model: currentEntry.Model, SystemPrompt: sysContent, ToolSpecsJSON: MarshalToolSpecs(toolSpecs)}
 		}
 
+		// 完成度门禁状态:lastTodo = 最近一次 Todo 快照(判断是否还有未完成项);
+		// gateNudges = 连续被门禁挡回的次数(死循环保护,见 completionGate)。
+		var lastTodo []PlanItem
+		gateNudges := 0
+
 		// 100 轮上限给复杂多步任务留足空间(read → analyze → edit → test → fix 这种循环)。
 		// 触顶通常说明 LLM 在死循环或反复试错,需要返回错误让用户介入。
 		for round := 0; round < mainAgentMaxRounds; round++ {
@@ -548,7 +554,7 @@ func StartStream(
 			}
 			// 按本轮模型支不支持视觉,即时把带图消息渲染成 base64 或 路径+OCR(见 renderConvoImages)。
 			// 只渲染发出去的副本,convo 规范形态(只存路径)不变。
-			assistantContent, reasoning, toolCalls, usage, err := streamOnce(
+			assistantContent, reasoning, toolCalls, finishReason, usage, err := streamOnce(
 				ctx,
 				currentEntry.APIKey, currentEntry.BaseURL, currentEntry.Model,
 				renderConvoImages(convo, currentEntry.Vision), currentEntry.MaxTokens, toolSpecs,
@@ -561,7 +567,7 @@ func StartStream(
 			if err != nil && isImageInputUnsupported(err) {
 				currentEntry.Vision = false
 				ch <- VisionUnsupportedMsg{Model: currentEntry.Model, BaseURL: currentEntry.BaseURL}
-				assistantContent, reasoning, toolCalls, usage, err = streamOnce(
+				assistantContent, reasoning, toolCalls, finishReason, usage, err = streamOnce(
 					ctx,
 					currentEntry.APIKey, currentEntry.BaseURL, currentEntry.Model,
 					renderConvoImages(convo, false), currentEntry.MaxTokens, toolSpecs,
@@ -591,10 +597,21 @@ func StartStream(
 			})
 
 			if len(toolCalls) == 0 {
+				// 完成度门禁:别把"这轮没工具调用"直接当成"任务完成"。
+				// 截断判定双信号(后端可能不给 finish_reason,尤其代理/自建池子):
+				// finish_reason==length 或 生成 token 撞上 max_tokens 上限。
+				truncated := finishReason == "length" ||
+					(usage != nil && currentEntry.MaxTokens > 0 && usage.CompletionTokens >= currentEntry.MaxTokens)
+				// 被截断、或还有未完成 todo 时,注入一条提示再跑一轮,催它继续。
+				if nudge := completionGate(truncated, lastTodo, &gateNudges); nudge != "" {
+					convo = append(convo, ChatMessage{Role: "user", Content: nudge})
+					continue
+				}
 				ch <- HistoryUpdateMsg{History: convo}
 				ch <- StreamDoneMsg{}
 				return
 			}
+			gateNudges = 0 // 有工具调用 = 有进展,重置门禁计数
 
 			// 执行每个工具调用,把结果加进 convo。
 			// 这些工具被 deepx 拦截 (不走 Executor):
@@ -680,6 +697,7 @@ func StartStream(
 					if perr != nil {
 						result = tools.ToolResult{Output: perr.Error(), Success: false}
 					} else {
+						lastTodo = items // 记录最新快照,供完成度门禁判断是否还有未完成项
 						ch <- PlanCreatedMsg{Plans: items}
 						done := 0
 						for _, it := range items {
@@ -775,6 +793,41 @@ func StartStream(
 //
 // reasoningEffort / thinking 是跨供应商通用的推理参数,**空字符串严格不发送**(走各家 API 默认),
 // 这是兼容 MiMo 等不支持这俩字段的模型的关键 —— 任何不主动启用的模型都不会被多余字段炸 400。
+// maxGateNudges 是完成度门禁连续催继续的上限:催够这么多次模型仍不动工具,就放行结束,防死循环/空转。
+const maxGateNudges = 3
+
+// completionGate 在"这轮没有工具调用"时决定是否还要继续:
+//   - 返回非空 = 应继续,内容是注入给模型的提示(催它接着干);
+//   - 返回 "" = 真的结束。
+//
+// 触发继续:① 上轮被截断(truncated,话没说完);② 还有未完成的 todo。
+// 死循环保护:连续催 maxGateNudges 次仍无进展就放行。纯对话/单步任务(没建 todo、未截断)照常一轮结束。
+func completionGate(truncated bool, todo []PlanItem, nudges *int) string {
+	if *nudges >= maxGateNudges {
+		return ""
+	}
+	if truncated {
+		*nudges++
+		return "(你上一条回复似乎被长度上限截断,没有输出完。请接着把没做完的部分继续做完——该调用工具就调用,不要停在这里总结。)"
+	}
+	if pending := countPendingTodos(todo); pending > 0 {
+		*nudges++
+		return fmt.Sprintf("(待办还有 %d 项未完成,任务尚未结束。请继续执行下一步并调用相应工具,不要提前收尾;若确实卡住无法继续,再说明原因。)", pending)
+	}
+	return ""
+}
+
+// countPendingTodos 统计 todo 里仍待办的项(pending/running);done/failed/blocked 不计入。
+func countPendingTodos(todo []PlanItem) int {
+	n := 0
+	for _, it := range todo {
+		if it.Status == PlanStatusPending || it.Status == PlanStatusRunning {
+			n++
+		}
+	}
+	return n
+}
+
 func streamOnce(
 	ctx context.Context,
 	apiKey, baseURL, modelID string,
@@ -784,7 +837,7 @@ func streamOnce(
 	reasoningEffort string,
 	thinking string,
 	ch chan<- tea.Msg,
-) (string, string, []ToolCall, *UsageInfo, error) {
+) (string, string, []ToolCall, string, *UsageInfo, error) {
 
 	body, err := json.Marshal(chatRequest{
 		Model:     modelID,
@@ -801,24 +854,24 @@ func streamOnce(
 		ReasoningEffort: validateReasoningEffort(reasoningEffort),
 	})
 	if err != nil {
-		return "", "", nil, nil, err
+		return "", "", nil, "", nil, err
 	}
 	req, err := http.NewRequestWithContext(ctx, "POST", baseURL+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
-		return "", "", nil, nil, err
+		return "", "", nil, "", nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return "", "", nil, nil, err
+		return "", "", nil, "", nil, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
 		b, _ := io.ReadAll(resp.Body)
-		return "", "", nil, nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(b))
+		return "", "", nil, "", nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(b))
 	}
 
 	var (
@@ -827,6 +880,7 @@ func streamOnce(
 		inReasoning      bool
 		toolBuf          = map[int]*ToolCall{}
 		lastUsage        *UsageInfo // stream_options.include_usage 会在最后 chunk 返回 usage
+		finishReason     string     // 最后一个非空 finish_reason("stop"/"length"/"tool_calls"…),供主循环判断截断
 	)
 
 	scanner := bufio.NewScanner(resp.Body)
@@ -851,6 +905,9 @@ func streamOnce(
 		}
 		if len(chunk.Choices) == 0 {
 			continue
+		}
+		if fr := chunk.Choices[0].FinishReason; fr != nil && *fr != "" {
+			finishReason = *fr
 		}
 		delta := chunk.Choices[0].Delta
 
@@ -887,7 +944,7 @@ func streamOnce(
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return contentBuilder.String(), reasoningBuilder.String(), nil, lastUsage, err
+		return contentBuilder.String(), reasoningBuilder.String(), nil, finishReason, lastUsage, err
 	}
 
 	// 按 index 升序拼装最终 tool_calls
@@ -897,7 +954,7 @@ func streamOnce(
 			toolCalls = append(toolCalls, *tc)
 		}
 	}
-	return contentBuilder.String(), reasoningBuilder.String(), toolCalls, lastUsage, nil
+	return contentBuilder.String(), reasoningBuilder.String(), toolCalls, finishReason, lastUsage, nil
 }
 
 // ListenToStream 把单条事件转给 bubbletea。
