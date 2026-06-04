@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
-	"runtime"
 	"sync"
 	"time"
 )
@@ -61,14 +60,9 @@ var (
 
 // startBackground 启动一个常驻进程,立即返回句柄 id,不等它结束。
 func startBackground(command, cwd string) ToolResult {
-	var cmd *exec.Cmd
-	if runtime.GOOS == "windows" {
-		cmd = exec.Command("cmd", "/C", command)
-	} else {
-		cmd = exec.Command("sh", "-c", command)
-	}
-	if cwd != "" {
-		cmd.Dir = cwd
+	cmd, err := sandboxCmd(command, cwd) // native=本地 shell;docker=容器内 exec
+	if err != nil {
+		return ToolResult{Output: "🛡️ 沙箱启动失败: " + err.Error(), Success: false}
 	}
 	setPgid(cmd) // 单独进程组,便于 KillBash 连子进程一起杀(否则 node/vite 之类会成孤儿)
 

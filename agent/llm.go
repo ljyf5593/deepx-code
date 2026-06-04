@@ -423,6 +423,7 @@ func coreSystemPrompt(workspace, skillCatalog string) string {
 # Shell 安全
 - 不主动执行破坏性命令(rm -rf / drop / force push 等)
 - 优先可逆操作,destructive 操作先确认
+- Write/Update 因目标在 workspace 外被拒时,由用户确认或自行处理,不要自作主张绕过。
 
 # 模式限制
 - plan 模式:禁止 Write / Update / Bash,其余工具均可使用。

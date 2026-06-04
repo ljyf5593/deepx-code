@@ -145,6 +145,50 @@ var translations = map[string]map[Lang]string{
 		LangZH: "显示/隐藏右侧状态栏(也可按 Ctrl+B)",
 		LangEN: "Show/hide the right status panel (or press Ctrl+B)",
 	},
+	"cmd.sandbox.desc": {
+		LangZH: "沙箱模式:off(关闭)/ native(OS 隔离,默认)/ docker(容器隔离)",
+		LangEN: "Sandbox mode: off / native (OS isolation, default) / docker (container isolation)",
+	},
+	"sandbox.current": {
+		LangZH: "当前沙箱:%s",
+		LangEN: "Current sandbox: %s",
+	},
+	"sandbox.switched_off": {
+		LangZH: "⚠️ 已关闭沙箱(off):命令不做任何隔离,Write/Edit 也不再限制 workspace。仅在你完全信任时用。",
+		LangEN: "⚠️ Sandbox turned off: commands run with no isolation and Write/Edit are no longer confined to the workspace. Use only when you fully trust the workload.",
+	},
+	"sandbox.switched_native_os": {
+		LangZH: "🛡️ 已切到 native 沙箱(OS 隔离:文件只能写 workspace 内,host 其余只读;读和网络不限)",
+		LangEN: "🛡️ Switched to native sandbox (OS isolation: writes confined to workspace, rest of host read-only; reads and network unrestricted)",
+	},
+	"sandbox.switched_native_soft": {
+		LangZH: "🛡️ 已切到 native 沙箱(软策略:本平台无 OS 隔离,仅黑名单拦明显危险命令;防误操作,非硬隔离)",
+		LangEN: "🛡️ Switched to native sandbox (soft policy: no OS isolation on this platform, only a blacklist for obviously dangerous commands; guards accidents, not a hard boundary)",
+	},
+	"sandbox.docker_unavailable": {
+		LangZH: "Docker 不可用:%s。仍保持 native。",
+		LangEN: "Docker unavailable: %s. Staying on native.",
+	},
+	"sandbox.pulling": {
+		LangZH: "拉取镜像",
+		LangEN: "pulling image",
+	},
+	"sandbox.pull_failed": {
+		LangZH: "🐳 镜像拉取失败:%s。保持 native。",
+		LangEN: "🐳 Image pull failed: %s. Staying on native.",
+	},
+	"sandbox.pull_canceled": {
+		LangZH: "🐳 已取消拉取镜像,保持 native。",
+		LangEN: "🐳 Image pull canceled. Staying on native.",
+	},
+	"sandbox.switched_docker": {
+		LangZH: "🐳 已切到 docker 沙箱(镜像 %s):命令在容器里跑,workspace 挂载到 /workspace。首次命令会拉镜像+起容器,可能稍慢。",
+		LangEN: "🐳 Switched to docker sandbox (image %s): commands run in a container with the workspace mounted at /workspace. The first command pulls the image and starts the container — may be slow.",
+	},
+	"sandbox.unknown": {
+		LangZH: "未知沙箱模式:%s(可选 off / native / docker)",
+		LangEN: "Unknown sandbox mode: %s (choose off / native / docker)",
+	},
 	"session.new": {
 		LangZH: "✨ 已开启全新对话。上一段对话已保存,/sessions 可找回。",
 		LangEN: "✨ Started a new conversation. The previous one is saved — see /sessions.",
@@ -199,6 +243,7 @@ var translations = map[string]map[Lang]string{
 			"- `/new` — 开启全新对话(当前对话已保存,可在 /sessions 找回)\n" +
 			"- `/sessions` — 历史对话列表(↑/↓ 选,Enter 切换)\n" +
 			"- `/status` — 显示/隐藏右侧状态栏(也可按 Ctrl+B)\n" +
+			"- `/sandbox` — 沙箱模式:`off`(关闭)/ `native`(OS 隔离,默认)/ `docker`(容器隔离)\n" +
 			"- `/undo` — 撤销上一轮对话(原输入回填输入框)\n" +
 			"- `/help` — 帮助\n\n" +
 			"**输入**\n\n" +
@@ -225,6 +270,7 @@ var translations = map[string]map[Lang]string{
 			"- `/new` — Start a brand-new conversation (current one is saved, see /sessions)\n" +
 			"- `/sessions` — Conversation history (↑/↓ select, Enter switch)\n" +
 			"- `/status` — Show/hide the right status panel (or press Ctrl+B)\n" +
+			"- `/sandbox` — Sandbox mode: `off` / `native` (OS isolation, default) / `docker` (container isolation)\n" +
 			"- `/undo` — Undo the last exchange (restores your input)\n" +
 			"- `/help` — Help\n\n" +
 			"**Input**\n\n" +
@@ -312,6 +358,7 @@ var translations = map[string]map[Lang]string{
 	"panel.usage":     {LangZH: "用量", LangEN: "Usage"},
 	"panel.commands":  {LangZH: "命令", LangEN: "Commands"},
 	"panel.codegraph": {LangZH: "代码图谱", LangEN: "CodeGraph"},
+	"panel.sandbox":   {LangZH: "🛡️ 沙箱", LangEN: "🛡️ Sandbox"},
 	"panel.plan":      {LangZH: "计划", LangEN: "Plan"},
 
 	// === Right panel labels ===
@@ -324,6 +371,7 @@ var translations = map[string]map[Lang]string{
 	"panel.label.cache":   {LangZH: "cache ", LangEN: "cache "},
 	"panel.label.time":    {LangZH: "duration", LangEN: "duration"},
 	"panel.label.cgstate": {LangZH: "状态", LangEN: "status"},
+	"panel.label.sbmode":  {LangZH: "模式", LangEN: "mode"},
 	"panel.label.cgcalls": {LangZH: "调用次数", LangEN: "calls "},
 
 	// === Status values ===

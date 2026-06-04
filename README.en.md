@@ -218,6 +218,7 @@ A built-in symbol-graph engine lets the model do symbol-level navigation + call-
 | `/compact`                           | manually compact the session        |
 | `/new` `/sessions`                   | start a new conversation / browse history (↑↓ select, Enter switch) |
 | `/status`                            | show/hide the right status panel (or press `Ctrl+B`) |
+| `/sandbox`                           | sandbox mode: `off` / `native` (default, OS isolation: macOS Seatbelt, Linux bubblewrap — writes confined to the workspace + process isolation; falls back to a soft-policy blacklist where no OS mechanism is available) / `docker` (container isolation, `/sandbox docker <image>`) |
 | `/lang`                              | switch UI language (zh / en)        |
 | `/mcp-list` `/mcp-add` `/mcp-delete` | manage MCP servers                  |
 | `/skills` `/config` `/mode`          | list skills / reconfigure key / show mode |
