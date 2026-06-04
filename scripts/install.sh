@@ -281,10 +281,13 @@ else
     LINE='export PATH="'"$BIN_DIR"':$PATH"'
     append_rc() {
         local rc="$1"
-        [ -f "$rc" ] || return
+        # 注意:必须 return 0。裸 return 会带回上一条命令([ -f ])的退出码,
+        # 文件不存在时即 1,在 set -e 下会让整个安装在第一个不存在的 rc(常见是 .zshrc)处中止,
+        # 导致 PATH 从未写入、deepx 装了却不在 PATH。Mac 默认有 .zshrc 故不暴露,Linux 必中。
+        [ -f "$rc" ] || return 0
         if grep -Fq "$BIN_DIR" "$rc"; then
             info "PATH 已在 $(basename "$rc") 配过"
-            return
+            return 0
         fi
         printf "\n# deepx\n%s\n" "$LINE" >> "$rc"
         success "已加入 $(basename "$rc")"
