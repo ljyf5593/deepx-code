@@ -640,6 +640,7 @@
       .reveal-d6 { transition-delay: 0.48s; }
       .reveal-d7 { transition-delay: 0.56s; }
       .reveal-d8 { transition-delay: 0.64s; }
+      .reveal-d9 { transition-delay: 0.72s; }
 
       /* ── Responsive ── */
       @media (max-width: 768px) {
@@ -780,7 +781,7 @@
     <section>
       <div class="container">
         <span class="section-label reveal">核心能力</span>
-        <h2 class="reveal reveal-d1">七大设计亮点</h2>
+        <h2 class="reveal reveal-d1">九大设计亮点</h2>
         <p class="section-sub reveal reveal-d2">
           每个特性都在解决一个实际问题，不是堆功能。
         </p>
@@ -841,6 +842,24 @@
             <p>
               符号级跳定义 / 找调用 / 接口实现 / 影响面分析。Go 经 go/types 精确解析，
               覆盖 16+ 语言。替代满仓库 grep + 逐个翻文件，从根上省 read/glob/grep 的 token。
+            </p>
+          </div>
+          <div class="feat-card reveal reveal-d8">
+            <div class="feat-icon">🧱</div>
+            <h3>原生 OS 级沙箱</h3>
+            <p>
+              默认 native 模式做 OS 隔离：macOS Seatbelt、Linux bubblewrap，写操作限定在
+              workspace + 进程隔离；无 OS 机制的平台退回软策略黑名单。也支持 docker 容器隔离或
+              off 完全关闭。不依赖容器也能给 agent 划出安全边界。
+            </p>
+          </div>
+          <div class="feat-card reveal reveal-d9">
+            <div class="feat-icon">🎛️</div>
+            <h3>工作模式（working mode）</h3>
+            <p>
+              一个命令锁定 agent 的方法论：karpathy（务实工匠）/ openspec（规格驱动）/
+              superpowers（全流程严谨）。三种模式互斥——选一种会禁用另两种的 skill，杜绝方法论混搭。
+              切换存入会话，每轮自动注入提示且不污染历史。
             </p>
           </div>
         </div>

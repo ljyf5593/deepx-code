@@ -219,6 +219,7 @@ CreatePlan
 | `/new` `/sessions`                   | 新しい会話を開始 / 履歴一覧（↑↓ 選択、Enter で切替） |
 | `/status`                            | 右側ステータス欄の表示/非表示（`Ctrl+B` でも可） |
 | `/sandbox`                           | サンドボックス：`off`（無効）/ `native`（既定、OS 隔離：macOS は Seatbelt、Linux は bubblewrap — 書き込みを workspace に限定 + プロセス隔離;OS 機構が無い環境ではソフトポリシーのブラックリストにフォールバック)/ `docker`（コンテナ隔離、`/sandbox docker <image>`） |
+| `/working-mode`                      | 作業モード（方法論）：`karpathy`（既定、実用重視）/ `openspec`（仕様駆動）/ `superpowers`（全工程を厳格に）；ポップアップで選択、または `/working-mode kp\|spec\|sp` で直接切替。3 モードは排他的で、1 つ選ぶと他 2 つの skill を無効化し方法論の混在を防ぐ。セッションに保存され、毎ターン履歴を汚さずプロンプトを注入 |
 | `/lang`                              | UI 言語切替（中 / 英）              |
 | `/mcp-list` `/mcp-add` `/mcp-delete` | MCP サーバー管理                    |
 | `/skills` `/config` `/mode`          | skill 一覧 / key 再設定 / モード表示 |

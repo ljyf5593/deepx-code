@@ -219,6 +219,7 @@ A built-in symbol-graph engine lets the model do symbol-level navigation + call-
 | `/new` `/sessions`                   | start a new conversation / browse history (↑↓ select, Enter switch) |
 | `/status`                            | show/hide the right status panel (or press `Ctrl+B`) |
 | `/sandbox`                           | sandbox mode: `off` / `native` (default, OS isolation: macOS Seatbelt, Linux bubblewrap — writes confined to the workspace + process isolation; falls back to a soft-policy blacklist where no OS mechanism is available) / `docker` (container isolation, `/sandbox docker <image>`) |
+| `/working-mode`                      | working mode (methodology): `karpathy` (default, pragmatic) / `openspec` (spec-driven) / `superpowers` (rigorous full workflow); pick via popup, or `/working-mode kp\|spec\|sp` to switch directly. The three modes are mutually exclusive — selecting one disables the other two's skills, preventing methodology mixing. Persisted per session, injected each turn without polluting history |
 | `/lang`                              | switch UI language (zh / en)        |
 | `/mcp-list` `/mcp-add` `/mcp-delete` | manage MCP servers                  |
 | `/skills` `/config` `/mode`          | list skills / reconfigure key / show mode |

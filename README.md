@@ -226,6 +226,7 @@ CreatePlan
 | `/new` `/sessions`         | 开启全新对话 / 历史对话列表（↑↓ 选，Enter 切换） |
 | `/status`                  | 显示/隐藏右侧状态栏（也可按 `Ctrl+B`） |
 | `/sandbox`                 | 沙箱模式：`off`（关闭）/ `native`（默认，OS 隔离：macOS Seatbelt、Linux bubblewrap，写操作限定在 workspace + 进程隔离；无 OS 机制的平台退回软策略黑名单）/ `docker`（容器隔离，`/sandbox docker <镜像>`） |
+| `/working-mode`            | 工作模式（方法论）：`karpathy`（默认，务实工匠）/ `openspec`（规格驱动）/ `superpowers`（全流程严谨）；弹窗选择，也可 `/working-mode kp\|spec\|sp` 直切。三种模式互斥——选中一种会禁用另外两种对应的 skill，避免方法论混搭。切换后存入会话，每轮自动注入提示且不污染历史 |
 | `/lang`                    | 切换界面语言（中 / 英）           |
 | `/mcp-list` `/mcp-add` `/mcp-delete` | 管理 MCP server         |
 | `/skills` `/config` `/mode`| 列出 skill / 重配 key / 查看模式  |
