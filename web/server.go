@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-// Server 是本地 web dashboard 的 HTTP 服务。绑 127.0.0.1,带随机 token 防同机乱访问。
+// Server 是本地 web dashboard 的 HTTP 服务。绑 0.0.0.0(接受所有网络接口),带随机 token 防未授权访问。
 // 输入回注通过 OnInput/OnReview 回调解耦,由 tui/run.go 注入(内部调 program.Send)。
 type Server struct {
 	hub   *Hub
@@ -44,15 +44,31 @@ func NewServer(hub *Hub) *Server {
 	return &Server{hub: hub, token: randomToken()}
 }
 
-// Listen 在 127.0.0.1:port 上监听(port=0 取随机空闲端口),返回带 token 的访问 URL。
+// Listen 在 0.0.0.0:port 上监听(port=0 取随机空闲端口),返回带 token 的访问 URL。
+// URL 中的 IP 自动取本机第一个非回环 IPv4 地址;找不到则回退 127.0.0.1。
 func (s *Server) Listen(port int) (string, error) {
-	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	ln, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", port))
 	if err != nil {
 		return "", err
 	}
 	s.ln = ln
 	actual := ln.Addr().(*net.TCPAddr).Port
-	return fmt.Sprintf("http://127.0.0.1:%d/?t=%s", actual, s.token), nil
+	host := localIP()
+	return fmt.Sprintf("http://%s:%d/?t=%s", host, actual, s.token), nil
+}
+
+// localIP 返回第一个非回环 IPv4 地址;无则返回 127.0.0.1。
+func localIP() string {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return "127.0.0.1"
+	}
+	for _, a := range addrs {
+		if ipnet, ok := a.(*net.IPNet); ok && !ipnet.IP.IsLoopback() && ipnet.IP.To4() != nil {
+			return ipnet.IP.String()
+		}
+	}
+	return "127.0.0.1"
 }
 
 // Serve 启动 HTTP 服务(阻塞)。通常放进 goroutine。Close 后返回。

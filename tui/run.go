@@ -13,7 +13,7 @@ import (
 // needsSetup=true 时(磁盘上没 model.yaml),TUI 起来后立即弹配置 modal,
 // 用户在 modal 里填 api key,deepx 落盘后无缝转入正常聊天。
 // version 是 build 时通过 ldflags 注入的版本号,显示在右栏并用作升级检查的当前版本。
-// webEnabled/webPort 控制本地 web dashboard:开启时起一个 127.0.0.1 服务,把同一会话镜像到浏览器。
+// webEnabled/webPort 控制本地 web dashboard:开启时起一个 HTTP 服务(监听 0.0.0.0),把同一会话镜像到浏览器。
 func Run(models agent.ModelConfig, needsSetup bool, version string, webEnabled bool, webPort int) error {
 	// 启动前清空当前终端的 scrollback (\x1b[3J),避免 deepx 启动时 Terminal.app
 	// 把之前 shell 的输出留在 alt-screen 的 scrollback 缓冲里,用户拖滚动条会看到。
