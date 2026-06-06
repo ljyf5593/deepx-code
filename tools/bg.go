@@ -86,6 +86,14 @@ func startBackground(command, cwd string) ToolResult {
 		p.done = true
 		p.exitErr = werr
 		p.mu.Unlock()
+
+		// 延迟清理:进程退出 5 分钟后自动从 map 移除,防止 LLM 忘记调用 KillBash 导致内存泄漏。
+		// 5 分钟窗口足够让 LLM 读取最后输出(KillBash 会提前清理,不会等到这里)。
+		time.AfterFunc(5*time.Minute, func() {
+			bgMu.Lock()
+			delete(bgProcs, p.id)
+			bgMu.Unlock()
+		})
 	}()
 
 	return ToolResult{
@@ -129,6 +137,13 @@ func adoptBackground(cmd *exec.Cmd, buf *lockedBuffer, startedAt time.Time, wait
 		p.done = true
 		p.exitErr = werr
 		p.mu.Unlock()
+
+		// 延迟清理:进程退出 5 分钟后自动从 map 移除,防止内存泄漏。
+		time.AfterFunc(5*time.Minute, func() {
+			bgMu.Lock()
+			delete(bgProcs, p.id)
+			bgMu.Unlock()
+		})
 	}()
 	return id
 }
