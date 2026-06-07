@@ -3,6 +3,7 @@ package main
 import (
 	"deepx/agent"
 	"deepx/config"
+	"deepx/tools"
 	"deepx/tui"
 	"fmt"
 	"io"
@@ -19,6 +20,10 @@ var (
 )
 
 func main() {
+	// 必须最先调用:若本进程是 Landlock 沙箱跳板(Linux 无 bwrap 时走此路),施加写禁闭后 exec
+	// 真正的命令、永不返回;否则立即返回,继续正常启动。其它平台为空实现。
+	tools.RunSandboxTrampolineIfRequested()
+
 	if len(os.Args) > 1 && (os.Args[1] == "--version" || os.Args[1] == "-v" || os.Args[1] == "version") {
 		fmt.Printf("deepx %s (commit %s, built %s)\n", version, commit, date)
 		return

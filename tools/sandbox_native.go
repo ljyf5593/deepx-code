@@ -9,7 +9,7 @@ import (
 //
 // 思路:native 不再只靠黑名单字符串过滤,而是用各平台的 OS 机制做**文件写禁闭 + 进程隔离**:
 //   - macOS: sandbox-exec(Seatbelt)——见 sandbox_native_darwin.go
-//   - Linux: bubblewrap(bwrap)——见 sandbox_native_linux.go
+//   - Linux: bubblewrap(bwrap)优先,无 bwrap 时退 Landlock(内核 ≥5.13)——见 sandbox_native_linux.go
 //   - 其它(Windows 等):无 OS 隔离,退回软黑名单——见 sandbox_native_other.go
 //
 // 网络保持开(否则 go mod / npm / git fetch 全断)。读基本不限,只禁"写到 workspace 外"。
