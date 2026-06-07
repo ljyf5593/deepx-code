@@ -26,7 +26,7 @@ stages:
         commands:
           # 一整行(Gitee Go 每条 command 是独立 shell,变量必须同条):
           # 反查当前 commit 上的 tag → 写进 GITEE_PARAMS 供 release 引用 → DRY_RUN 只编出 ./dist。
-          - 'command -v zip >/dev/null 2>&1 || apt-get install -y zip; git fetch --tags --force >/dev/null 2>&1 || true; TAG="$(git describe --tags --exact-match ${GITEE_COMMIT:-HEAD} 2>/dev/null)"; [ -n "$TAG" ] || { echo "当前 commit 无 tag(请用 tag 触发,或临时写死 TAG)"; exit 1; }; echo "RELEASE_TAG=$TAG" >> GITEE_PARAMS; DRY_RUN=1 TAG="$TAG" bash scripts/gitee-release.sh; ls -la dist/'
+          - 'command -v zip >/dev/null 2>&1 || apt-get install -y zip; git fetch --tags --force >/dev/null 2>&1 || true; TAG="$(git describe --tags --exact-match ${GITEE_COMMIT:-HEAD} 2>/dev/null)"; [ -n "$TAG" ] || { echo "当前 commit 无 tag(请用 tag 触发,或临时写死 TAG)"; exit 1; }; echo "RELEASE_TAG=$TAG" >> GITEE_PARAMS; echo "RELEASE_VER=${TAG#v}" >> GITEE_PARAMS; DRY_RUN=1 TAG="$TAG" bash scripts/gitee-release.sh; ls -la dist/'
         # 把 ./dist 作为制品上传,供下游 release 跨容器取用
         artifacts:
           - name: BUILD_ARTIFACT
@@ -48,9 +48,15 @@ stages:
         # 拉上游 build 的制品(=整个 ./dist)进工作目录
         upstreamArtifact:
           - BUILD_ARTIFACT
-        # assertFiles 指向下载下来的目录,整目录挂到发行版(插件支持 folder,免列动态文件名)
+        # 必须列【单个文件】:给目录会被打成一个 dist.tar.gz(不是我们要的)。
+        # 版本号动态,用 GITEE_PARAMS 里不带 v 的 RELEASE_VER 拼出每个文件名(Gitee Go 会替换 ${...})。
         assertFiles:
-          - ./dist
+          - ./dist/deepx_${RELEASE_VER}_darwin_amd64.tar.gz
+          - ./dist/deepx_${RELEASE_VER}_darwin_arm64.tar.gz
+          - ./dist/deepx_${RELEASE_VER}_linux_amd64.tar.gz
+          - ./dist/deepx_${RELEASE_VER}_linux_arm64.tar.gz
+          - ./dist/deepx_${RELEASE_VER}_windows_amd64.zip
+          - ./dist/checksums.txt
         prerelease: false
         allowUpdate: true
         notify: []
