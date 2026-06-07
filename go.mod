@@ -9,6 +9,7 @@ require (
 	charm.land/lipgloss/v2 v2.0.3
 	github.com/charmbracelet/x/ansi v0.11.7
 	github.com/getcharzp/onnxruntime_purego v1.24.0
+	github.com/landlock-lsm/go-landlock v0.8.1
 	github.com/odvcencio/gotreesitter v0.19.1
 	github.com/tiktoken-go/tokenizer v0.7.0
 	golang.org/x/tools v0.45.0
@@ -45,4 +46,5 @@ require (
 	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.44.0 // indirect
 	golang.org/x/text v0.37.0 // indirect
+	kernel.org/pub/linux/libs/security/libcap/psx v1.2.77 // indirect
 )
