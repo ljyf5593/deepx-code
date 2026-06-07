@@ -39,12 +39,10 @@ type subAgentResult struct {
 	Err     error
 }
 
-// 子 agent 的轮数上限。比主 agent 紧一点(主 100, 子 50),
-// 因为子 agent 任务粒度更小;做不完直接 fail,scheduler 会把该节点标 failed 而不影响其他节点。
-const subAgentMaxRounds = 50
-
 // subAgentCtxBudgetPct 是子 agent convo 占模型上下文窗口的上限百分比;超过即中止本节点。
 // 子 agent 不压缩,留 20% 余量给本轮输入+输出,避免撑爆窗口导致 API 脏失败。
+// 不设固定轮数上限(对齐主 agent / Claude Code):靠这个 ctxBudget 兜底 + 无进展断路器
+// (复用 maxNoProgressRounds)拦失败循环,跑到模型自己停为止。
 const subAgentCtxBudgetPct = 80
 
 // estimateConvoTokens 粗估一段 convo 的 token 数(沿用项目 ~3 字符/token 的口径)。
@@ -117,7 +115,11 @@ func runSubAgent(ctx context.Context, in subAgentInput) subAgentResult {
 	// lastFile = 最近操作的文件路径,给 Update 漏 path 时兜底回填(issue #81)。
 	var lastFile string
 
-	for round := 0; round < subAgentMaxRounds; round++ {
+	// noProgressRounds = 连续「全部工具调用失败」的轮数;到 maxNoProgressRounds 判卡死中止。
+	// 无固定轮数上限,跑到模型自己停为止;ctxBudget + 本断路器 + ctx 取消三道边界兜底。
+	noProgressRounds := 0
+
+	for {
 		// 检查 context 是否取消(ESC/退出)
 		if ctx.Err() != nil {
 			close(silent)
@@ -165,15 +167,19 @@ func runSubAgent(ctx context.Context, in subAgentInput) subAgentResult {
 			return subAgentResult{Summary: summary}
 		}
 
+		roundProgress := false
 		for _, tc := range toolCalls {
 			var result tools.ToolResult
 			switch tc.Function.Name {
 			case "UpdatePlanStatus":
 				// 子 agent 想自报状态,吞掉给 OK。scheduler 才是状态来源。
-				// (只用 Output 拼 tool 消息,Success 不读,故不设)
-				result = tools.ToolResult{Output: "已记录"}
+				// 视为成功(进展),避免无进展断路器误伤纯状态上报。
+				result = tools.ToolResult{Output: "已记录", Success: true}
 			default:
 				result = executeTool(tc, in.Mode, &lastFile)
+			}
+			if result.Success {
+				roundProgress = true
 			}
 			convo = append(convo, ChatMessage{
 				Role:       "tool",
@@ -182,11 +188,19 @@ func runSubAgent(ctx context.Context, in subAgentInput) subAgentResult {
 				Content:    result.Output,
 			})
 		}
-	}
 
-	close(silent)
-	<-drained
-	return subAgentResult{Err: fmt.Errorf("子 agent [%s] 超过 %d 轮工具调用上限", in.NodeID, subAgentMaxRounds)}
+		// 无进展断路器:本轮工具全失败则累加,任一成功则归零;连续卡死到上限就中止本节点。
+		if roundProgress {
+			noProgressRounds = 0
+		} else {
+			noProgressRounds++
+			if noProgressRounds >= maxNoProgressRounds {
+				close(silent)
+				<-drained
+				return subAgentResult{Err: fmt.Errorf("子 agent [%s] 连续 %d 轮工具调用均未成功,疑似卡死,中止", in.NodeID, maxNoProgressRounds)}
+			}
+		}
+	}
 }
 
 // resolveModelEntry 把 plan/task 里 "flash" / "pro" 字符串映射到 ModelConfig 里的完整 entry。

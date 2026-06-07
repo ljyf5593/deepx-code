@@ -23,10 +23,20 @@ const (
 	AgentMode_Auto   AgentMode = "auto"
 	AgentMode_Review AgentMode = "review"
 
-	// 主 agent 单轮对话内的工具调用上限。
-	// 100 轮给复杂多步任务留足空间(典型场景:CreatePlan 之后还要做修改 + 测试 + 修复循环)。
-	// 触顶通常意味着 LLM 在死循环,会返回错误中断。
-	mainAgentMaxRounds = 100
+	// maxNoProgressRounds:连续这么多轮工具调用「全部失败、无任何成功」即判定卡死/空转,暂停。
+	// 这是主 agent 唯一的"主动"熔断,拦反复改同一处失败、反复跑同一条报错命令这类失败循环;
+	// 只要某轮有任一工具成功就重置计数,productive 的长任务不受影响。
+	//
+	// 刻意不设"绝对轮数上限"(对标 Claude Code 交互式主循环):长任务跑到模型自己停为止,
+	// 不在第 N 轮硬性中断。终止由三道天然边界保证 —— ① convo 每轮只增,上下文单调增长,
+	// 迟早撞模型上下文窗口让 streamOnce 优雅报错退出;② 本断路器拦失败循环;③ 用户 ESC 随时中断。
+	// (见 issue #84:旧的固定 100 轮上限会把合法长任务在中途打断、需手动继续。)
+	maxNoProgressRounds = 15
+
+	// compactTriggerPct:单个 turn 内,上一轮真实 prompt tokens 占模型上下文窗口达到这个百分比,
+	// 就在下次请求前自动压缩历史(对标 Claude Code 的 auto-compact:压缩+继续,而非熔断停)。
+	// 取 80 留 ~20% 给本轮输出;压缩后历史缩到 ~20% 窗口,不会立刻反复触发。
+	compactTriggerPct = 80
 )
 
 // ModelEntry 单个 role 的完整连接配置 — base_url / model id / api_key 三件套。
@@ -80,6 +90,14 @@ type ModelSwitchMsg struct {
 // HistoryUpdateMsg 让 UI 用最新的 history 替换本地副本(包含 assistant tool_calls / tool 结果)
 type HistoryUpdateMsg struct {
 	History []ChatMessage
+}
+
+// CompactedMsg 在「单个长 turn 内」自动压缩后发给 UI:摘要存在 session(每轮注入 system 尾部),
+// 而 system 不入 history(HistoryUpdateMsg 会剥掉)——必须用这条把新摘要带出来,否则下轮上下文丢失。
+// history 截断由随后的 HistoryUpdateMsg 同步。Turns = 本次被压掉的 user 轮数,仅供 UI 提示。
+type CompactedMsg struct {
+	Summary string
+	Turns   int
 }
 
 // VisionUnsupportedMsg:本以为支持视觉的模型,实际发图被端点拒(如 404 "no image input")。
@@ -555,12 +573,44 @@ func StartStream(
 		// lastFile = 本轮最近操作的文件路径,给 Update 漏 path 时兜底回填(issue #81)。
 		var lastFile string
 
-		// 100 轮上限给复杂多步任务留足空间(read → analyze → edit → test → fix 这种循环)。
-		// 触顶通常说明 LLM 在死循环或反复试错,需要返回错误让用户介入。
-		for round := 0; round < mainAgentMaxRounds; round++ {
+		// noProgressRounds = 连续「全部工具调用失败」的轮数;到 maxNoProgressRounds 判定卡死中止。
+		// 任一轮有工具成功就归零。无绝对轮数上限(见 maxNoProgressRounds 注释),跑到模型自己停为止。
+		noProgressRounds := 0
+
+		// 循环内 auto-compact 状态:lastPromptTokens = 上一轮真实 prompt tokens(判是否该压缩);
+		// inLoopCompactOff = 本轮压缩失败后置位,退回"撞窗口优雅报错",避免反复压缩刷请求。
+		lastPromptTokens := 0
+		inLoopCompactOff := false
+
+		for {
 			// 检查 context 是否取消(ESC/退出),提前退出不卡后台
 			if ctx.Err() != nil {
 				return
+			}
+
+			// 循环内 auto-compact:上一轮 prompt 接近上下文窗口就先压缩历史腾空间再继续(不熔断停)。
+			// 对标 Claude Code:压缩 convo[1:] 成摘要、重建 [system(新摘要)]+尾部,新摘要经 CompactedMsg
+			// 回传 TUI 存 session(否则被剥的 system 摘要会丢失),history 截断经 HistoryUpdateMsg 同步。
+			if ctxWin := currentEntry.ContextWindow; !inLoopCompactOff && ctxWin > 0 &&
+				lastPromptTokens >= ctxWin*compactTriggerPct/100 &&
+				len(convo) > 0 && convo[0].Role == "system" {
+				hist := convo[1:]
+				sum, cutIdx, turns, cerr := RunCompression(convo[0].Content, MarshalToolSpecs(toolSpecs), hist, currentEntry, ctxWin)
+				if cerr != nil {
+					inLoopCompactOff = true // 压不动(历史太短/摘要失败)→ 本轮不再尝试,退回撞窗口报错
+				} else {
+					summary = sum
+					kept := append([]ChatMessage(nil), hist[cutIdx:]...)
+					convo = append([]ChatMessage{{Role: "system", Content: BuildSystemPrompt(workspace, skillCatalog, summary)}}, kept...)
+					lastPromptTokens = 0 // 压完归零,等下一轮真实 usage 再判
+					// 防死循环:若压缩后历史仍超阈值(最近 5 轮本身就超窗口,RunCompression 切点缩不动),
+					// 再压也无效 → 本轮关掉循环内压缩,退回撞窗口优雅报错,避免反复压缩刷请求。
+					if EstimatePromptTokens(workspace, skillCatalog, summary, kept) >= ctxWin*compactTriggerPct/100 {
+						inLoopCompactOff = true
+					}
+					ch <- CompactedMsg{Summary: summary, Turns: turns}
+					ch <- HistoryUpdateMsg{History: convo}
+				}
 			}
 			// 按本轮模型支不支持视觉,即时把带图消息渲染成 base64 或 路径+OCR(见 renderConvoImages)。
 			// 只渲染发出去的副本,convo 规范形态(只存路径)不变。
@@ -596,6 +646,7 @@ func StartStream(
 			// 主 agent 的 token 用量发给 TUI 显示。
 			if usage != nil {
 				ch <- UsageMsg{Usage: *usage}
+				lastPromptTokens = usage.PromptTokens // 供下一轮判断是否触发循环内 auto-compact
 			}
 
 			// 把本轮 assistant 回复写入历史(含 reasoning_content,thinking 模型下轮需要)
@@ -622,6 +673,9 @@ func StartStream(
 				return
 			}
 			gateNudges = 0 // 有工具调用 = 有进展,重置门禁计数
+
+			// roundProgress = 本轮是否有任一工具调用成功;决定 noProgressRounds 是归零还是累加。
+			roundProgress := false
 
 			// 执行每个工具调用,把结果加进 convo。
 			// 这些工具被 deepx 拦截 (不走 Executor):
@@ -785,6 +839,9 @@ func StartStream(
 					result = executeTool(tc, mode, &lastFile)
 				}
 
+				if result.Success {
+					roundProgress = true
+				}
 				ch <- ToolCallResultMsg{
 					Name:    tc.Function.Name,
 					Output:  result.Output,
@@ -798,9 +855,18 @@ func StartStream(
 				})
 			}
 			ch <- HistoryUpdateMsg{History: convo}
-		}
 
-		ch <- StreamErrMsg{fmt.Errorf("超过工具调用轮数上限")}
+			// 无进展断路器:本轮工具全失败则累加,任一成功则归零;连续卡死到上限就暂停。
+			if roundProgress {
+				noProgressRounds = 0
+			} else {
+				noProgressRounds++
+				if noProgressRounds >= maxNoProgressRounds {
+					ch <- StreamErrMsg{fmt.Errorf("连续 %d 轮工具调用均未成功,疑似卡死或反复失败,已暂停。可输入「继续」让它接着尝试,或换个说法。", maxNoProgressRounds)}
+					return
+				}
+			}
+		}
 	}()
 
 	return ListenToStream(ch), ch

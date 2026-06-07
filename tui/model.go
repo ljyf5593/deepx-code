@@ -2014,6 +2014,27 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, agent.ListenToStream(m.streamCh)
 
+	case agent.CompactedMsg:
+		// 单个长 turn 内自动压缩:把新摘要存进 session(每轮由 BuildSystemPrompt 注入 system 尾部)。
+		// system 不入 history(会被 HistoryUpdateMsg 剥掉),不靠这条 session.summary 就丢上下文。
+		// history 的截断由 agent 随后发的 HistoryUpdateMsg 同步,这里只管摘要。
+		if m.streamCh == nil {
+			return m, nil
+		}
+		m.summary = msg.Summary
+		if m.session != nil {
+			_ = m.session.SaveSummary(msg.Summary)
+		}
+		// 前缀已变,旧缓存命中数会让 cache% 失真,清零(同 compressionResultMsg)。
+		if m.lastUsage != nil {
+			m.lastUsage.PromptCacheHitTokens = 0
+		}
+		if msg.Turns > 0 {
+			m.chatContent.Open(kindSystem, fmt.Sprintf("**已自动压缩会话历史（%d 轮→摘要）**", msg.Turns))
+			m.refreshViewport()
+		}
+		return m, agent.ListenToStream(m.streamCh)
+
 	case agent.PrefixSnapshotMsg:
 		// 持久化本轮实际发送的前缀 + 当前签名(供重启检测与缓存友好压缩)。
 		m.onPrefixSnapshot(msg)
