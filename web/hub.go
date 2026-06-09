@@ -3,12 +3,20 @@ package web
 import (
 	"strconv"
 	"sync"
+
+	"deepx/agent"
 )
 
-// Message 是聊天窗口里的一条消息(只在左栏渲染)。role: "user" | "assistant"。
+// Message 是聊天窗口里的一条消息(只在左栏渲染)。role: "user" | "assistant" | "tool"。
 type Message struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
+	// 以下仅 role=="tool" 有意义:把工具调用内联到对话流里渲染(对齐 TUI)。
+	ID     string `json:"id,omitempty"`
+	Name   string `json:"name,omitempty"`
+	Args   string `json:"args,omitempty"`
+	Status string `json:"status,omitempty"` // running | done | failed
+	Output string `json:"output,omitempty"`
 }
 
 // ToolCallView 是右栏实时工具调用列表的一项。
@@ -52,6 +60,7 @@ type Snapshot struct {
 	Workspace     string         `json:"workspace"`
 	Lang          string         `json:"lang"` // "zh" | "en",跟 TUI 同步
 	ReviewPending *ReviewInfo    `json:"reviewPending"`
+	AskQuestions  []agent.AskQuestion `json:"askQuestions"` // 非空 = 有待答选择题
 
 	// 控制态,与 TUI 对齐:路由 / 权限模式 / 沙箱 / 工作模式 / 代码图谱状态 + 会话列表。
 	Vendor      string        `json:"vendor"`      // 模型厂商(api host)
@@ -159,6 +168,7 @@ func (h *Hub) copySnapshotLocked() Snapshot {
 		u := *h.snap.Usage
 		s.Usage = &u
 	}
+	s.AskQuestions = append([]agent.AskQuestion(nil), h.snap.AskQuestions...)
 	if h.snap.ReviewPending != nil {
 		r := *h.snap.ReviewPending
 		s.ReviewPending = &r
@@ -177,6 +187,7 @@ func (h *Hub) apply(ev Event) Event {
 		h.snap.ToolCalls = []ToolCallView{}
 		h.snap.Usage = nil
 		h.snap.ReviewPending = nil
+		h.snap.AskQuestions = nil
 		h.snap.Streaming = true
 		h.openAssistant = -1
 
@@ -197,6 +208,11 @@ func (h *Hub) apply(ev Event) Event {
 		h.snap.ToolCalls = append(h.snap.ToolCalls, ToolCallView{
 			ID: id, Name: ev.Name, Args: ev.Args, Status: "running",
 		})
+		// 同时内联到对话流;工具后另起 assistant 气泡(下一条 token 新开)。
+		h.snap.Messages = append(h.snap.Messages, Message{
+			Role: "tool", ID: id, Name: ev.Name, Args: ev.Args, Status: "running",
+		})
+		h.openAssistant = -1
 
 	case "tool_result":
 		// 配对到最近一个同名 running 工具。
@@ -210,6 +226,19 @@ func (h *Hub) apply(ev Event) Event {
 				}
 				tc.Output = ev.Output
 				ev.ID = tc.ID
+				break
+			}
+		}
+		// 同步对话流里的工具条。
+		for i := len(h.snap.Messages) - 1; i >= 0; i-- {
+			m := &h.snap.Messages[i]
+			if m.Role == "tool" && m.Status == "running" && m.Name == ev.Name {
+				if ev.Success != nil && *ev.Success {
+					m.Status = "done"
+				} else {
+					m.Status = "failed"
+				}
+				m.Output = ev.Output
 				break
 			}
 		}
@@ -253,6 +282,15 @@ func (h *Hub) apply(ev Event) Event {
 		h.snap.Streaming = false
 		h.openAssistant = -1
 
+	case "ask_request":
+		h.snap.AskQuestions = ev.Questions
+	case "ask_resolved":
+		h.snap.AskQuestions = nil
+	case "interrupted":
+		// 用户中断:停掉 streaming,清掉任何待答的 review/ask 弹层。
+		h.snap.Streaming = false
+		h.snap.ReviewPending = nil
+		h.snap.AskQuestions = nil
 	case "review_request":
 		h.snap.ReviewPending = &ReviewInfo{Name: ev.Name, Args: ev.Args}
 

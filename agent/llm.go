@@ -437,6 +437,7 @@ func coreSystemPrompt(workspace, skillCatalog string) string {
 # 工具使用
 - 改代码前先 inspect 相关文件、理解上下文,改动最小化。编辑时保持现有风格,不顺手做不相关的重构,默认保持向后兼容(除非用户明确要求)。
 - 查代码符号(函数/类型/方法)的定义、调用关系、实现者、继承请优先用 CodeGraph工具(更准、不误命中注释/字符串)。
+- 需要用户在**有限、明确的选项**里做选择或拍板时(需求确认、技术选型、A/B 方案、是否包含某功能等),**必须调用 AskUser 工具弹窗让用户勾选**,可一次问多道;不要把选项写成文字列表让用户敲字回复。开放性、需要自由表达的问题才用文字提问。
 
 # 技能skill使用
 - 实现功能、修复 bug、重构或 review 代码时,遵循本轮用户消息尾部「工作模式」指明的方法论 skill(加载其正文并执行),不要使用未指明的其它工作模式 skill。
@@ -713,6 +714,25 @@ func StartStream(
 
 				var result tools.ToolResult
 				switch tc.Function.Name {
+				case "AskUser":
+					// 弹 TUI 选择框,阻塞等用户选完(同 review 的 channel 骨架)。
+					questions, perr := parseAskUserArgs(tc.Function.Arguments)
+					if perr != nil {
+						result = tools.ToolResult{Output: perr.Error(), Success: false}
+					} else {
+						respCh := make(chan string, 1)
+						ch <- AskUserMsg{Questions: questions, ResponseCh: respCh}
+						select {
+						case answer := <-respCh:
+							if answer == "" {
+								result = tools.ToolResult{Output: "用户取消了选择(或希望改用文字回答)。请改用普通对话继续询问,不要重复弹窗。", Success: false}
+							} else {
+								result = tools.ToolResult{Output: answer, Success: true}
+							}
+						case <-ctx.Done():
+							return
+						}
+					}
 				case "CreatePlan":
 					plans, perr := parseCreatePlanArgs(tc.Function.Arguments)
 					if perr != nil {

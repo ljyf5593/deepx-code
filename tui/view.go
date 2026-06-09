@@ -345,6 +345,9 @@ func (m model) View() tea.View {
 	if m.reviewPending {
 		mainUI = overlayCentered(mainUI, m.reviewBlock(), m.width, m.height)
 	}
+	if m.askPending {
+		mainUI = overlayCentered(mainUI, m.askUserBlock(), m.width, m.height)
+	}
 	if m.showLangModal {
 		mainUI = overlayCentered(mainUI, m.langModalBlock(), m.width, m.height)
 	}
@@ -385,7 +388,7 @@ func (m model) View() tea.View {
 	// modal 打开时不显示真实光标 —— 避免光标卡在 modal 背后。
 	// cursorBlinkOff 由 cursorBlinkTickMsg 600ms 切一次:亮时塞 Cursor,灭时不塞 —
 	// 不依赖终端的 DECSCUSR blink 支持,VS Code 终端等也能闪。
-	if !m.showSetup && !m.showLangModal && !m.showWorkingModeModal && !m.showSandboxModal && !m.showMcpAdd && !m.showWebConfig && !m.showMcpDelete && !m.showSkillAdd && !m.showSkillDelete && !m.showSessionList && !m.reviewPending && !m.cursorBlinkOff {
+	if !m.showSetup && !m.showLangModal && !m.showWorkingModeModal && !m.showSandboxModal && !m.showMcpAdd && !m.showWebConfig && !m.showMcpDelete && !m.showSkillAdd && !m.showSkillDelete && !m.showSessionList && !m.reviewPending && !m.askPending && !m.cursorBlinkOff {
 		if c := m.input.Cursor(); c != nil {
 			c.Position.X += inputGutterWidth
 			c.Position.Y += bodyH + queuedH + inputTopPad
@@ -867,11 +870,11 @@ func (m model) rightPanelView() string {
 			sbDesc += " (软策略)"
 		}
 	}
-	rows = append(rows, section(T("panel.sandbox"), []string{
+	rows = append(rows, section("🛡 "+T("panel.sandbox"), []string{
 		label(T("panel.label.sbmode")) + " " + sbDesc,
 	})...)
 	// 工作模式:kp / openspec / sp。
-	rows = append(rows, section(T("panel.workmode"), []string{
+	rows = append(rows, section("🧭 "+T("panel.workmode"), []string{
 		label(T("panel.label.wmode")) + " " + string(m.workingMode),
 	})...)
 	// 规划进度:始终显示(无规划时 0/0)。完整 plan 树在 chat 区展示,右栏只放摘要。

@@ -117,8 +117,8 @@ func renderUserBubble(text string, viewportW int) string {
 	if boxW < 1 {
 		boxW = 1
 	}
+	// 暂时去掉钢蓝色底(userBubbleBg),只保留左色条 + 白字 + 按宽换行,避免整片底色显乱。
 	box := lipgloss.NewStyle().
-		Background(userBubbleBg).
 		Foreground(userBubbleFg).
 		Width(boxW).
 		Padding(0, 1)

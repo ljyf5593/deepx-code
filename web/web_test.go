@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"deepx/agent"
 )
 
 // TestHubApply 验证 hub reducer:user→token 开 assistant 气泡,tool_call/result 配对,plan/usage 更新。
@@ -29,11 +31,15 @@ func TestHubApply(t *testing.T) {
 	h.Broadcast(Event{Kind: "done"})
 
 	s := h.SnapshotCopy()
-	if len(s.Messages) != 2 || s.Messages[0].Role != "user" || s.Messages[1].Role != "assistant" {
+	// 工具调用现在也内联进对话流:user / assistant / tool 三条。
+	if len(s.Messages) != 3 || s.Messages[0].Role != "user" || s.Messages[1].Role != "assistant" || s.Messages[2].Role != "tool" {
 		t.Fatalf("messages wrong: %+v", s.Messages)
 	}
 	if s.Messages[1].Content != "hello" {
 		t.Fatalf("assistant content = %q, want hello", s.Messages[1].Content)
+	}
+	if s.Messages[2].Name != "Bash" || s.Messages[2].Status != "done" || s.Messages[2].Output != "a\nb" {
+		t.Fatalf("inline tool message wrong: %+v", s.Messages[2])
 	}
 	if len(s.ToolCalls) != 1 || s.ToolCalls[0].Status != "done" || s.ToolCalls[0].Output != "a\nb" {
 		t.Fatalf("toolcall wrong: %+v", s.ToolCalls)
@@ -46,14 +52,52 @@ func TestHubApply(t *testing.T) {
 	}
 }
 
+// TestHubAskQuestions 验证 AskUser 选择题在快照里的维护:ask_request 写入、ask_resolved 清空、
+// 新一轮 user_message 也清空(避免上一轮残留的待答问题串到下一轮)。
+func TestHubAskQuestions(t *testing.T) {
+	h := NewHub("flash", "pro", "/tmp/ws", "zh")
+	qs := []agent.AskQuestion{{
+		Question: "用哪个数据库?",
+		Options:  []agent.AskOption{{Label: "PostgreSQL", Value: "pg"}, {Label: "MySQL", Value: "mysql"}},
+	}}
+
+	h.Broadcast(Event{Kind: "ask_request", Questions: qs})
+	if s := h.SnapshotCopy(); len(s.AskQuestions) != 1 || s.AskQuestions[0].Options[1].Value != "mysql" {
+		t.Fatalf("ask_request should populate snapshot, got %+v", s.AskQuestions)
+	}
+
+	h.Broadcast(Event{Kind: "ask_resolved"})
+	if s := h.SnapshotCopy(); len(s.AskQuestions) != 0 {
+		t.Fatalf("ask_resolved should clear snapshot, got %+v", s.AskQuestions)
+	}
+
+	// 新一轮 user_message 应清空残留待答问题
+	h.Broadcast(Event{Kind: "ask_request", Questions: qs})
+	h.Broadcast(Event{Kind: "user_message", Text: "hi"})
+	if s := h.SnapshotCopy(); len(s.AskQuestions) != 0 {
+		t.Fatalf("new turn should clear pending questions, got %+v", s.AskQuestions)
+	}
+
+	// interrupted 应停掉 streaming 并清空待答问题
+	h.Broadcast(Event{Kind: "ask_request", Questions: qs})
+	h.Broadcast(Event{Kind: "interrupted"})
+	if s := h.SnapshotCopy(); s.Streaming || len(s.AskQuestions) != 0 {
+		t.Fatalf("interrupted should stop streaming + clear questions, got streaming=%v q=%+v", s.Streaming, s.AskQuestions)
+	}
+}
+
 // TestServerAuthAndCallbacks 验证 token 鉴权 + input/review 回调 + SSE 快照。
 func TestServerAuthAndCallbacks(t *testing.T) {
 	h := NewHub("flash", "pro", "/tmp/ws", "en")
 	srv := NewServer(h)
 	gotInput := make(chan string, 1)
 	gotReview := make(chan bool, 1)
+	gotAsk := make(chan string, 1)
+	gotInterrupt := make(chan struct{}, 1)
 	srv.OnInput = func(s string) { gotInput <- s }
 	srv.OnReview = func(b bool) { gotReview <- b }
+	srv.OnAskAnswer = func(s string) { gotAsk <- s }
+	srv.OnInterrupt = func() { gotInterrupt <- struct{}{} }
 
 	rawURL, err := srv.Listen("127.0.0.1", 0)
 	if err != nil {
@@ -113,6 +157,26 @@ func TestServerAuthAndCallbacks(t *testing.T) {
 		t.Fatal("OnReview not called")
 	}
 
+	// POST /api/ask-answer → 回调拿到答案 JSON
+	answer := `{"answers":[{"question":"用哪个库?","selected":["mysql"]}]}`
+	postJSON(t, base+"/api/ask-answer?t="+token, map[string]any{"answer": answer})
+	select {
+	case got := <-gotAsk:
+		if got != answer {
+			t.Fatalf("OnAskAnswer got %q, want %q", got, answer)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("OnAskAnswer not called")
+	}
+
+	// POST /api/interrupt → 回调被触发(无 body)
+	postJSON(t, base+"/api/interrupt?t="+token, map[string]any{})
+	select {
+	case <-gotInterrupt:
+	case <-time.After(time.Second):
+		t.Fatal("OnInterrupt not called")
+	}
+
 	// GET / 应返回内嵌的 index.html(验证 go:embed 链路)
 	resp, err = http.Get(base + "/?t=" + token)
 	if err != nil {
@@ -120,7 +184,7 @@ func TestServerAuthAndCallbacks(t *testing.T) {
 	}
 	idxBody, _ := readAllString(resp)
 	resp.Body.Close()
-	if resp.StatusCode != 200 || !strings.Contains(idxBody, "deepx web") {
+	if resp.StatusCode != 200 || !strings.Contains(idxBody, "deepx-code") {
 		t.Fatalf("index want 200 + embedded html, got %d (len=%d)", resp.StatusCode, len(idxBody))
 	}
 

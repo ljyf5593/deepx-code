@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -9,7 +10,11 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
+
+	"deepx/mcp"
+	"deepx/skill"
 )
 
 // Server 是本地 web dashboard 的 HTTP 服务。默认绑 127.0.0.1(仅本机),带随机 token 防未授权访问。
@@ -22,8 +27,10 @@ type Server struct {
 	srv   *http.Server
 
 	// 回调:浏览器提交输入 / review 确认时触发。由调用方注入。
-	OnInput  func(text string)
-	OnReview func(approve bool)
+	OnInput     func(text string)
+	OnReview    func(approve bool)
+	OnAskAnswer func(answer string) // AskUser 选择题:浏览器回传的答案 JSON
+	OnInterrupt func()              // 浏览器点"停止":中断当前执行(等价终端 Esc)
 
 	// OnListFiles 返回工作区文件相对路径列表,供前端 @ 文件选择器使用。由调用方注入
 	// (web 包不能依赖 tui —— tui 已依赖 web,会成环;遍历逻辑在 tui 侧,经回调注入)。
@@ -39,6 +46,11 @@ type Server struct {
 	OnSetSandbox     func(mode string) // 沙箱 off/native/docker
 	OnSetWorkingMode func(mode string) // 工作模式 karpathy/openspec/superpowers
 	OnSetLang        func(lang string) // 界面语言 zh/en
+
+	// 左栏操作:压缩会话 / MCP 增删(均需动 live agent 状态,经回调注入)。
+	OnCompact   func()                 // 手动压缩当前会话(等价 /compact)
+	OnMcpAdd    func(cfg mcp.ServerConfig) // 添加 MCP server 并连接
+	OnMcpDelete func(name string)          // 删除 MCP server 并断连
 }
 
 // NewServer 创建 Server,token 先随机兜底(可被 SetToken 覆盖成 session 固定令牌)。
@@ -122,6 +134,8 @@ func (s *Server) Serve() error {
 	mux.HandleFunc("/api/events", s.handleEvents)
 	mux.HandleFunc("/api/input", s.handleInput)
 	mux.HandleFunc("/api/review", s.handleReview)
+	mux.HandleFunc("/api/ask-answer", s.handleAskAnswer)
+	mux.HandleFunc("/api/interrupt", s.handleInterrupt)
 	mux.HandleFunc("/api/state", s.handleState)
 	mux.HandleFunc("/api/files", s.handleFiles)
 	mux.HandleFunc("/api/new", s.handleNew)
@@ -133,6 +147,16 @@ func (s *Server) Serve() error {
 	mux.HandleFunc("/api/sandbox", s.handleSandbox)
 	mux.HandleFunc("/api/workingmode", s.handleWorkingMode)
 	mux.HandleFunc("/api/lang", s.handleLang)
+	// 左栏操作:压缩会话 / MCP 管理 / Skill 管理
+	mux.HandleFunc("/api/compact", s.handleCompact)
+	mux.HandleFunc("/api/mcp-list", s.handleMcpList)
+	mux.HandleFunc("/api/mcp-add", s.handleMcpAdd)
+	mux.HandleFunc("/api/mcp-delete", s.handleMcpDelete)
+	mux.HandleFunc("/api/skill-list", s.handleSkillList)
+	mux.HandleFunc("/api/skill-search", s.handleSkillSearch)
+	mux.HandleFunc("/api/skill-install", s.handleSkillInstall)
+	mux.HandleFunc("/api/skill-install-source", s.handleSkillInstallSource)
+	mux.HandleFunc("/api/skill-delete", s.handleSkillDelete)
 	s.srv = &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 	err := s.srv.Serve(s.ln)
 	if err == http.ErrServerClosed {
@@ -268,6 +292,251 @@ func (s *Server) handleReview(w http.ResponseWriter, r *http.Request) {
 		s.OnReview(body.Approve)
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleAskAnswer 接收浏览器对 AskUser 选择题的作答(answer 为答案 JSON 字符串),回注 TUI。
+func (s *Server) handleAskAnswer(w http.ResponseWriter, r *http.Request) {
+	if !s.authed(r) || r.Method != http.MethodPost {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	var body struct {
+		Answer string `json:"answer"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	if s.OnAskAnswer != nil {
+		s.OnAskAnswer(body.Answer)
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleInterrupt 接收浏览器的"停止"请求,中断当前执行(无 body)。
+func (s *Server) handleInterrupt(w http.ResponseWriter, r *http.Request) {
+	if !s.authed(r) || r.Method != http.MethodPost {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	if s.OnInterrupt != nil {
+		s.OnInterrupt()
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleCompact 触发手动压缩当前会话(无 body),经回调回注 TUI。
+func (s *Server) handleCompact(w http.ResponseWriter, r *http.Request) {
+	if !s.authed(r) || r.Method != http.MethodPost {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	if s.OnCompact != nil {
+		s.OnCompact()
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// mcpItem 是给前端的 MCP server 列表项(从 ~/.deepx/mcp.json 读)。
+type mcpItem struct {
+	Name      string `json:"name"`
+	Transport string `json:"transport"` // stdio | http
+	Detail    string `json:"detail"`    // command [args] 或 url
+}
+
+// handleMcpList 返回已配置的 MCP server 列表(GET)。
+func (s *Server) handleMcpList(w http.ResponseWriter, r *http.Request) {
+	if !s.authed(r) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	cfgs, _ := mcp.LoadConfig()
+	out := make([]mcpItem, 0, len(cfgs))
+	for _, c := range cfgs {
+		it := mcpItem{Name: c.Name, Transport: "stdio", Detail: strings.TrimSpace(c.Command + " " + strings.Join(c.Args, " "))}
+		if c.URL != "" {
+			it.Transport = "http"
+			it.Detail = c.URL
+		}
+		out = append(out, it)
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(out)
+}
+
+// handleMcpAdd 添加 MCP server。body: {name, command, args(空格分隔), url}。stdio 与 http 二选一。
+func (s *Server) handleMcpAdd(w http.ResponseWriter, r *http.Request) {
+	if !s.authed(r) || r.Method != http.MethodPost {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	var body struct {
+		Name    string `json:"name"`
+		Command string `json:"command"`
+		Args    string `json:"args"`
+		URL     string `json:"url"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	name := strings.TrimSpace(body.Name)
+	if name == "" || (strings.TrimSpace(body.Command) == "" && strings.TrimSpace(body.URL) == "") {
+		http.Error(w, "需要 name 且 command 或 url 至少其一", http.StatusBadRequest)
+		return
+	}
+	cfg := mcp.ServerConfig{Name: name}
+	if u := strings.TrimSpace(body.URL); u != "" {
+		cfg.URL = u
+	} else {
+		cfg.Command = strings.TrimSpace(body.Command)
+		if a := strings.Fields(body.Args); len(a) > 0 {
+			cfg.Args = a
+		}
+	}
+	if s.OnMcpAdd != nil {
+		s.OnMcpAdd(cfg)
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleMcpDelete 删除 MCP server。body: {name}。
+func (s *Server) handleMcpDelete(w http.ResponseWriter, r *http.Request) {
+	s.postField(w, r, "name", func(name string) {
+		if s.OnMcpDelete != nil && name != "" {
+			s.OnMcpDelete(name)
+		}
+	})
+}
+
+// skillItem 是给前端的已装 skill 列表项。Builtin=true 的内置 skill 不可删。
+type skillItem struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Builtin     bool   `json:"builtin"`
+}
+
+// handleSkillList 返回已安装的 skill 列表(GET);标注哪些是内置(不可删)。
+func (s *Server) handleSkillList(w http.ResponseWriter, r *http.Request) {
+	if !s.authed(r) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	metas, _ := skill.InstalledList()
+	builtin := skill.BuiltinNames()
+	out := make([]skillItem, 0, len(metas))
+	for _, m := range metas {
+		out = append(out, skillItem{Name: m.Name, Description: m.Description, Builtin: builtin[m.Name]})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(out)
+}
+
+// handleSkillInstall 从 GitHub URL / 本地路径安装 skill(同步,可能耗时几秒)。
+// catalog 每轮重建,装完下一轮自动可见,无需回注 TUI。
+func (s *Server) handleSkillInstall(w http.ResponseWriter, r *http.Request) {
+	if !s.authed(r) || r.Method != http.MethodPost {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	var body struct {
+		Src string `json:"src"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	src := strings.TrimSpace(body.Src)
+	resp := map[string]any{"ok": true}
+	if src == "" {
+		resp = map[string]any{"ok": false, "error": "src 为空"}
+	} else if name, err := skill.Install(src); err != nil {
+		resp = map[string]any{"ok": false, "error": err.Error()}
+	} else {
+		resp = map[string]any{"ok": true, "name": name}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// skillSearchItem 是 Clawhub 搜索结果项。
+type skillSearchItem struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Author      string `json:"author"`
+	Stars       int    `json:"stars"`
+	Downloads   int    `json:"downloads"`
+	SourceID    string `json:"sourceId"`
+	RemoteRef   string `json:"remoteRef"`
+}
+
+// handleSkillSearch 从 Clawhub 搜索 skill。body: {query}。
+func (s *Server) handleSkillSearch(w http.ResponseWriter, r *http.Request) {
+	if !s.authed(r) || r.Method != http.MethodPost {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	var body struct {
+		Query string `json:"query"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+	w.Header().Set("Content-Type", "application/json")
+	infos, err := skill.SearchSkills(ctx, strings.TrimSpace(body.Query), "")
+	if err != nil {
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": err.Error(), "results": []skillSearchItem{}})
+		return
+	}
+	out := make([]skillSearchItem, 0, len(infos))
+	for _, i := range infos {
+		out = append(out, skillSearchItem{
+			Name: i.Name, Description: i.Description, Author: i.Author,
+			Stars: i.Stars, Downloads: i.Downloads, SourceID: i.SourceID, RemoteRef: i.RemoteRef,
+		})
+	}
+	_ = json.NewEncoder(w).Encode(map[string]any{"results": out})
+}
+
+// handleSkillInstallSource 安装一个搜索结果(Clawhub)。body: {sourceId, remoteRef}。
+func (s *Server) handleSkillInstallSource(w http.ResponseWriter, r *http.Request) {
+	if !s.authed(r) || r.Method != http.MethodPost {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	var body struct {
+		SourceID  string `json:"sourceId"`
+		RemoteRef string `json:"remoteRef"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	sourceID := strings.TrimSpace(body.SourceID)
+	if sourceID == "" {
+		sourceID = skill.SourceIDClawhub
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+	w.Header().Set("Content-Type", "application/json")
+	if name, err := skill.InstallFromSource(ctx, sourceID, strings.TrimSpace(body.RemoteRef)); err != nil {
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": err.Error()})
+	} else {
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "name": name})
+	}
+}
+
+// handleSkillDelete 删除已安装 skill(直接改磁盘,下一轮 catalog 重建生效)。
+// 内置 skill 不允许删除(后端兜底,即使前端被绕过)。
+func (s *Server) handleSkillDelete(w http.ResponseWriter, r *http.Request) {
+	s.postField(w, r, "name", func(name string) {
+		if name != "" && !skill.BuiltinNames()[name] {
+			_ = skill.Delete(name)
+		}
+	})
 }
 
 func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {

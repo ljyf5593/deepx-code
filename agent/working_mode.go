@@ -35,15 +35,15 @@ func workingModePrompt(m WorkingMode) string {
 	case WorkingModeOpenSpec:
 		return "[工作模式 openspec] 本轮按「规格驱动」工作:请使用 `openspec`技能 并严格遵循——" +
 			"动手写代码前,先写 / 更新改动规格(spec),与用户对齐后再按规格实现。" +
-			"**本模式只使用 openspec 这一 skill;不要加载或遵循 karpathy-guidelines、superpowers。**"
+			"**本模式使用 openspec 这一 skill;不要加载或遵循 karpathy-guidelines、superpowers。**"
 	case WorkingModeSuperpowers:
 		return "[工作模式 superpowers] 本轮按「全流程严谨」工作:请使用`superpowers`技能 并" +
 			"**严格遵循它定义的完整工作流**(入口会按需引导到 brainstorming / 计划 / TDD / 子 agent 执行 / 代码审查 / 收尾 / 调试 / 完成前验证 等子 skill)——别只做其中几步。" +
-			"**本模式只使用 superpowers 这套 skill;不要加载或遵循 karpathy-guidelines、openspec。**"
+			"**本模式使用 superpowers 这套 skill;不要加载或遵循 karpathy-guidelines、openspec。**"
 	default: // karpathy(默认)
 		return "[工作模式 karpathy] 本轮按 karpathy-guidelines 工作:请使用 `karpathy-guidelines`技能 并严格遵循——" +
 			"想清楚再写、最小改动、显式暴露假设、定义可验证的成功标准。" +
-			"**本模式只使用 karpathy-guidelines 这一 skill;不要加载或遵循 openspec、superpowers。**"
+			"**本模式使用 karpathy-guidelines 这一 skill;不要加载或遵循 openspec、superpowers。**"
 	}
 }
 

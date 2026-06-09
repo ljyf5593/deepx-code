@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>deepx web</title>
+  <title>deepx-code webui</title>
   <link rel="stylesheet" href="styles.css" />
   <script src="vendor/vue.global.prod.js"></script>
   <script src="vendor/marked.min.js"></script>
@@ -11,7 +11,7 @@
 <body>
   <div id="app">
     <header class="topbar">
-      <div class="brand">deepx<span class="brand-sub">web</span></div>
+      <div class="brand">deepx-code<span class="brand-sub">webui</span></div>
       <div class="conn" :class="connected ? 'on' : 'off'">
         <span class="dot"></span>{{ connected ? t('connected') : t('reconnecting') }}
       </div>
@@ -40,23 +40,90 @@
             </div>
           </div>
         </div>
+        <!-- 左栏底部操作:压缩会话 / MCP 管理 / Skill 管理 -->
+        <div class="pane-actions">
+          <button :disabled="streaming" @click="compact">🗜 {{ t('act.compact') }}</button>
+          <button @click="openMcp">🔌 {{ t('act.mcp') }}</button>
+          <button @click="openSkill">🧩 {{ t('act.skill') }}</button>
+        </div>
       </nav>
 
       <!-- 中:聊天 -->
       <section class="chat">
         <div class="messages" ref="msgList">
+          <!-- 空会话:补一句欢迎语,避免一片空白 -->
+          <div v-if="!messages.length && !streaming" class="welcome">
+            <div class="welcome-brand">deepx<span>-code</span></div>
+            <div class="welcome-text">{{ t('welcome') }}</div>
+          </div>
           <div v-for="(m, i) in messages" :key="i" class="msg" :class="m.role">
-            <div class="role">{{ m.role === 'user' ? t('you') : 'deepx' }}</div>
-            <div v-if="m.role === 'user'" class="bubble user-text">{{ m.content }}</div>
-            <div v-else class="bubble md" v-html="render(m.content)"></div>
+            <!-- 工具调用:内联紧凑条,可展开看参数/输出 -->
+            <details v-if="m.role === 'tool'" class="chat-tool" :class="m.status">
+              <summary>
+                <span class="box">{{ toolIcon(m.status) }}</span>
+                <span class="tool-name">{{ m.name }}</span>
+                <span class="tool-arg" v-if="mainArg(m)">{{ mainArg(m) }}</span>
+              </summary>
+              <pre class="tool-args" v-if="m.args">{{ m.args }}</pre>
+              <pre class="tool-out" v-if="m.output">{{ m.output }}</pre>
+            </details>
+            <template v-else-if="m.role === 'user'">
+              <div class="role">{{ t('you') }}</div>
+              <div class="bubble user-text">{{ m.content }}</div>
+            </template>
+            <!-- assistant:仅当有实际内容时才出气泡,空消息不渲染空卡片 -->
+            <template v-else-if="m.content && m.content.trim()">
+              <div class="role">deepx</div>
+              <div class="bubble md" v-html="render(m.content)"></div>
+            </template>
           </div>
           <div v-if="thinking" class="msg assistant">
             <div class="role">deepx</div>
             <div class="bubble typing"><span></span><span></span><span></span></div>
           </div>
+          <!-- 实时活动清单(像 TUI:对话区底部的 todo / 计划,随状态实时勾选) -->
+          <div v-if="plan.length || step.length" class="chat-plan">
+            <div v-if="plan.length" class="chat-plan-group">
+              <div class="chat-plan-title">📋 {{ t('panel.todo') }} {{ planDone(plan) }}/{{ plan.length }}</div>
+              <div v-for="p in plan" :key="p.id" class="plan-item" :class="p.status">
+                <span class="box">{{ planIcon(p.status) }}</span>
+                <div class="plan-body">
+                  <div class="plan-title">{{ p.title }}<span class="tag" v-if="p.model">[{{ p.model }}]</span></div>
+                  <div class="plan-sum" v-if="p.summary">{{ p.summary }}</div>
+                </div>
+              </div>
+            </div>
+            <div v-if="step.length" class="chat-plan-group">
+              <div class="chat-plan-title">🧩 {{ t('panel.plan') }} {{ planDone(step) }}/{{ step.length }}</div>
+              <div v-for="p in step" :key="p.id" class="plan-item" :class="p.status">
+                <span class="box">{{ planIcon(p.status) }}</span>
+                <div class="plan-body">
+                  <div class="plan-title">{{ p.title }}<span class="tag" v-if="p.model">[{{ p.model }}]</span></div>
+                  <div class="plan-sum" v-if="p.summary">{{ p.summary }}</div>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
 
         <div class="controls-bar">
+          <!-- 活动状态行(对齐 TUI 输入框上方):状态 · 实时耗时 · 工具,靠左 -->
+          <div class="status-footer" v-if="showStatus">
+            <template v-if="streaming">
+              <span class="sf-dot"></span>
+              <span class="sf-word run">{{ t('footer.' + status) }}</span>
+              <span class="sf-dim">· {{ elapsedText }}</span>
+              <span class="sf-dim" v-if="activeToolName">· {{ activeToolName }}</span>
+            </template>
+            <template v-else-if="status === 'error'">
+              <span class="sf-word err">✗ {{ t('footer.error') }}</span>
+            </template>
+            <template v-else>
+              <span class="sf-word done">✓ {{ t('done.done') }}</span>
+              <span class="sf-dim">· {{ elapsedText }}</span>
+              <span class="sf-dim" v-if="toolCalls.length">· {{ toolCalls.length }} {{ t('done.tools') }}</span>
+            </template>
+          </div>
           <label class="ctl">
             <span class="ctl-label">{{ t('panel.routing') }}</span>
             <select :value="routing" @change="setModel($event.target.value)">
@@ -100,6 +167,7 @@
             @blur="mention.active = false"
             rows="1"
             ref="ta"></textarea>
+          <button v-if="streaming" type="button" class="stop-btn" @click="interrupt">{{ t('stop') }}</button>
           <button type="submit" :disabled="!input.trim()">{{ t('send') }}</button>
         </form>
       </section>
@@ -135,41 +203,14 @@
 
         <div class="sec">
           <div class="sec-title">◆ {{ t('panel.todo') }}</div>
-          <div v-if="!plan.length" class="empty">—</div>
-          <div v-for="p in plan" :key="p.id" class="plan-item" :class="p.status">
-            <span class="box">{{ planIcon(p.status) }}</span>
-            <div class="plan-body">
-              <div class="plan-title">{{ p.title }}<span class="tag" v-if="p.model">[{{ p.model }}]</span></div>
-              <div class="plan-sum" v-if="p.summary">{{ p.summary }}</div>
-            </div>
-          </div>
+          <div class="kv-val">{{ plan.length ? planDone(plan) + '/' + plan.length : '—' }}</div>
         </div>
 
         <div class="sec">
           <div class="sec-title">◆ {{ t('panel.plan') }}</div>
-          <div v-if="!step.length" class="empty">—</div>
-          <div v-for="p in step" :key="p.id" class="plan-item" :class="p.status">
-            <span class="box">{{ planIcon(p.status) }}</span>
-            <div class="plan-body">
-              <div class="plan-title">{{ p.title }}<span class="tag" v-if="p.model">[{{ p.model }}]</span></div>
-              <div class="plan-sum" v-if="p.summary">{{ p.summary }}</div>
-            </div>
-          </div>
+          <div class="kv-val">{{ step.length ? planDone(step) + '/' + step.length : '—' }}</div>
         </div>
 
-        <div class="sec">
-          <div class="sec-title">◆ {{ t('panel.tools') }}</div>
-          <div v-if="!toolCalls.length" class="empty">—</div>
-          <details v-for="tc in toolCalls" :key="tc.id" class="tool" :class="tc.status">
-            <summary>
-              <span class="box">{{ toolIcon(tc.status) }}</span>
-              <span class="tool-name">{{ tc.name }}</span>
-              <span class="tool-arg" v-if="mainArg(tc)">{{ mainArg(tc) }}</span>
-            </summary>
-            <pre class="tool-args" v-if="tc.args">{{ tc.args }}</pre>
-            <pre class="tool-out" v-if="tc.output">{{ tc.output }}</pre>
-          </details>
-        </div>
       </aside>
     </main>
 
@@ -185,8 +226,114 @@
         </div>
       </div>
     </div>
+
+    <!-- AskUser 选择题弹层 -->
+    <div v-if="askPending" class="review-mask">
+      <div class="review-box ask-box">
+        <div class="review-title">{{ t('ask.title') }}</div>
+        <div v-for="(q, qi) in askPending" :key="qi" class="ask-q">
+          <div class="ask-question">{{ q.question }}<span class="ask-kind">{{ q.multiple ? t('ask.multi') : t('ask.single') }}</span></div>
+          <label v-for="(opt, oi) in q.options" :key="oi" class="ask-opt" :class="{ on: askSel[qi] && askSel[qi][oi] }">
+            <input :type="q.multiple ? 'checkbox' : 'radio'" :name="'q'+qi"
+                   :checked="askSel[qi] && askSel[qi][oi]" @change="toggleAsk(qi, oi, q.multiple)">
+            <span>{{ opt.label }}</span>
+          </label>
+        </div>
+        <div class="review-actions">
+          <button class="reject" @click="cancelAsk()">{{ t('ask.cancel') }}</button>
+          <button class="approve" @click="submitAsk()">{{ t('ask.submit') }}</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- MCP 管理弹层 -->
+    <div v-if="mcpShow" class="review-mask" @click.self="mcpShow=false">
+      <div class="review-box mgr-box">
+        <div class="review-title">🔌 {{ t('act.mcp') }}</div>
+        <div class="mgr-list">
+          <div v-if="!mcpList.length" class="empty">{{ t('mgr.none') }}</div>
+          <div v-for="m in mcpList" :key="m.name" class="mgr-item">
+            <div class="mgr-item-main">
+              <div class="mgr-name">{{ m.name }} <span class="mgr-tag">{{ m.transport }}</span></div>
+              <div class="mgr-detail">{{ m.detail }}</div>
+            </div>
+            <button class="mgr-del" @click="deleteMcp(m.name)">{{ t('mgr.delete') }}</button>
+          </div>
+        </div>
+        <div class="mgr-add">
+          <div class="mgr-add-title">{{ t('mgr.add') }}</div>
+          <input v-model="mcpForm.name" :placeholder="t('mcp.name')">
+          <input v-model="mcpForm.command" :placeholder="t('mcp.command')">
+          <input v-model="mcpForm.args" :placeholder="t('mcp.args')">
+          <div class="mgr-or">— {{ t('mcp.or') }} —</div>
+          <input v-model="mcpForm.url" :placeholder="t('mcp.url')">
+          <button class="approve" @click="addMcp">{{ t('mgr.add') }}</button>
+        </div>
+        <div class="review-actions">
+          <button @click="mcpShow=false">{{ t('mgr.close') }}</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Skill 管理弹层(安装 / 已安装 两个 tab) -->
+    <div v-if="skillShow" class="review-mask" @click.self="skillShow=false">
+      <div class="review-box mgr-box mgr-fixed">
+        <div class="review-title">🧩 {{ t('act.skill') }}</div>
+        <div class="mgr-tabs">
+          <button :class="{ on: skillTab==='install' }" @click="skillTab='install'">{{ t('skill.tab.install') }}</button>
+          <button :class="{ on: skillTab==='installed' }" @click="skillTab='installed'">{{ t('skill.tab.installed') }}</button>
+        </div>
+        <div class="mgr-body">
+
+        <!-- 安装 tab：Clawhub 搜索 + GitHub URL -->
+        <div v-if="skillTab==='install'">
+          <div class="mgr-add-title">{{ t('skill.search.title') }}</div>
+          <div class="skill-search-row">
+            <input v-model="skillQuery" :placeholder="t('skill.search.ph')" @keydown.enter="searchSkill">
+            <button class="approve" :disabled="skillSearching" @click="searchSkill">{{ skillSearching ? t('skill.searching') : t('skill.search.btn') }}</button>
+          </div>
+          <div class="mgr-list">
+            <div v-if="skillSearched && !skillResults.length" class="empty">{{ t('skill.noresult') }}</div>
+            <div v-for="r in skillResults" :key="r.remoteRef" class="mgr-item">
+              <div class="mgr-item-main">
+                <div class="mgr-name">{{ r.name }} <span class="mgr-meta">★{{ r.stars }} · {{ r.author }}</span></div>
+                <div class="mgr-detail">{{ r.description }}</div>
+              </div>
+              <button class="approve" :disabled="skillInstalling" @click="installSource(r)">{{ t('mgr.add') }}</button>
+            </div>
+          </div>
+          <div class="mgr-add">
+            <div class="mgr-add-title">{{ t('skill.add') }}</div>
+            <input v-model="skillForm.src" :placeholder="t('skill.src')">
+            <button class="approve" :disabled="skillInstalling" @click="addSkill">{{ skillInstalling ? t('skill.installing') : t('mgr.add') }}</button>
+          </div>
+          <div v-if="skillMsg" class="mgr-msg" :class="{ err: skillErr }">{{ skillMsg }}</div>
+        </div>
+
+        <!-- 已安装 tab -->
+        <div v-else class="mgr-list">
+          <div v-if="!skillList.length" class="empty">{{ t('mgr.none') }}</div>
+          <div v-for="s in skillList" :key="s.name" class="mgr-item">
+            <div class="mgr-item-main">
+              <div class="mgr-name">{{ s.name }}<span class="mgr-tag" v-if="s.builtin">{{ t('skill.builtin') }}</span></div>
+              <div class="mgr-detail">{{ s.description }}</div>
+            </div>
+            <button v-if="!s.builtin" class="mgr-del" @click="deleteSkill(s.name)">{{ t('mgr.delete') }}</button>
+          </div>
+        </div>
+        </div><!-- /mgr-body -->
+
+        <div class="review-actions">
+          <button @click="skillShow=false">{{ t('mgr.close') }}</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 顶部临时提示(压缩完成等) -->
+    <div v-if="toast" class="toast">{{ toast }}</div>
   </div>
 
+  <script src="https://unpkg.com/xterm@5.3.0/lib/xterm.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

@@ -2,6 +2,7 @@ package tui
 
 import (
 	"deepx/agent"
+	"deepx/mcp"
 	"deepx/session"
 	"deepx/tools"
 	"deepx/web"
@@ -52,6 +53,11 @@ func Run(models agent.ModelConfig, needsSetup bool, version string) error {
 		// 浏览器输入 / review 确认 → program.Send 注入,走和终端完全相同的 Update 逻辑。
 		srv.OnInput = func(text string) { p.Send(webInputMsg{text: text}) }
 		srv.OnReview = func(approve bool) { p.Send(webReviewMsg{approve: approve}) }
+		srv.OnAskAnswer = func(answer string) { p.Send(webAskAnswerMsg{answer: answer}) }
+		srv.OnInterrupt = func() { p.Send(webInterruptMsg{}) }
+		srv.OnCompact = func() { p.Send(webCompactMsg{}) }
+		srv.OnMcpAdd = func(cfg mcp.ServerConfig) { p.Send(webMcpAddMsg{cfg: cfg}) }
+		srv.OnMcpDelete = func(name string) { p.Send(webMcpDeleteMsg{name: name}) }
 		srv.OnListFiles = func() []string {
 			wd, _ := os.Getwd()
 			return listWorkspaceFiles(wd)

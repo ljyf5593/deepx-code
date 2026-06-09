@@ -495,4 +495,44 @@ var Tools = []Tool{
 		ReadOnly: true,
 		// Roles 留空 = 所有角色可见;子 agent 由其系统提示词禁止使用(同 CreatePlan)。
 	},
+	{
+		Name: "AskUser",
+		Description: "向用户发起一道或多道选择题,在终端弹窗里让用户直接勾选(单选/多选),用户选完把结果回传给你——比让用户敲一长串文字省事得多。\n\n" +
+			"**何时用**:需求确认(可一次列多个需求点,每个给几个选项)、在有限且明确的取舍里让用户拍板(技术选型、是否包含某功能、A/B 方案二选一)。\n\n" +
+			"**何时不用**:开放性问题、需要用户自由表达或填具体内容(路径/命名/数值)的场景——那些仍用普通文字提问。别把每句话都做成弹窗。\n\n" +
+			"**用法**:questions 数组,每题含 question(题面)+ options(2~6 个选项,各有 label;value 省略则等于 label)+ 可选 multiple(true=多选,默认单选)。用户取消时本工具返回失败,届时改用普通对话继续。",
+		Parameters: ToolParam{
+			Type: "object",
+			Properties: map[string]PropDef{
+				"questions": {
+					Type:        "array",
+					Description: "选择题列表,可一次问多道(如多个需求点的确认)。",
+					Items: map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"question": map[string]any{"type": "string", "description": "题面/需求点描述"},
+							"multiple": map[string]any{"type": "boolean", "description": "是否多选;省略=单选"},
+							"options": map[string]any{
+								"type":        "array",
+								"description": "2~6 个候选项",
+								"items": map[string]any{
+									"type": "object",
+									"properties": map[string]any{
+										"label": map[string]any{"type": "string", "description": "显示给用户的文字"},
+										"value": map[string]any{"type": "string", "description": "选中后回传给你的标识;省略则等于 label"},
+									},
+									"required": []string{"label"},
+								},
+							},
+						},
+						"required": []string{"question", "options"},
+					},
+				},
+			},
+			Required: []string{"questions"},
+		},
+		// Executor 为 nil:在 agent/llm.go 工具循环里被拦截,弹 TUI 选择框、阻塞等用户选完再回传。
+		Executor: nil,
+		ReadOnly: true,
+	},
 }

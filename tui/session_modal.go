@@ -113,18 +113,20 @@ func (m *model) loadCurrentConversation() {
 }
 
 // maybeSetConvTitle 在对话还没标题时,用当前这条用户输入当标题(截断)。
-func (m *model) maybeSetConvTitle(userText string) {
+// 返回是否真的设置了标题(供调用方决定要不要广播会话列表给 web)。
+func (m *model) maybeSetConvTitle(userText string) bool {
 	if m.session == nil {
-		return
+		return false
 	}
 	if strings.TrimSpace(m.session.ConvTitle()) != "" {
-		return
+		return false
 	}
 	t := strings.TrimSpace(userText)
 	if t == "" {
-		return
+		return false
 	}
 	m.session.SetConvTitle(truncTitle(t, 40))
+	return true
 }
 
 // toggleStatusPanel 显隐右侧状态栏并记忆到 meta。chat 宽度随之变化,需重设 viewport 宽度、

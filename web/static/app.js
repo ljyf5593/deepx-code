@@ -10,6 +10,7 @@ const I18N = {
     connected: '已连接',
     reconnecting: '重连中…',
     streaming: '生成中…',
+    stop: '停止',
     you: '你',
     send: '发送',
     'placeholder.idle': '输入消息,Enter 发送,Shift+Enter 换行',
@@ -17,6 +18,41 @@ const I18N = {
     'review.title': '需要确认',
     'review.approve': '批准',
     'review.reject': '拒绝',
+    'ask.title': '请选择',
+    'ask.single': '(单选)',
+    'ask.multi': '(多选)',
+    'ask.submit': '提交',
+    'ask.cancel': '取消',
+    'footer.thinking': '思考中',
+    'footer.streaming': '输出中',
+    'footer.tool': '调用工具',
+    'footer.error': '出错',
+    'done.done': '完成',
+    'done.tools': '次工具调用',
+    welcome: '你好,我是 deepx-code 👋 描述你的需求,我来帮你读代码、改代码、跑命令。可用 @ 引用工作区文件,Enter 发送。',
+    'act.compact': '压缩会话',
+    'act.mcp': 'MCP 管理',
+    'act.skill': 'Skill 管理',
+    'mgr.none': '暂无',
+    'mgr.add': '添加',
+    'mgr.delete': '删除',
+    'mgr.close': '关闭',
+    'mcp.name': '名称',
+    'mcp.command': '命令(stdio,如 npx)',
+    'mcp.args': '参数(空格分隔)',
+    'mcp.or': '或',
+    'mcp.url': 'HTTP URL',
+    'skill.add': '从 GitHub URL / 本地路径安装',
+    'skill.src': 'https://github.com/owner/repo 或本地路径',
+    'skill.installing': '安装中…',
+    'skill.builtin': '内置',
+    'skill.tab.install': '安装',
+    'skill.tab.installed': '已安装',
+    'skill.search.title': '从 Clawhub 搜索',
+    'skill.search.ph': '搜索 skill 关键词',
+    'skill.search.btn': '搜索',
+    'skill.searching': '搜索中…',
+    'skill.noresult': '无结果',
     workspace: '工作区',
     'panel.vendor': '模型厂商',
     'panel.curmodel': '当前模型',
@@ -27,7 +63,7 @@ const I18N = {
     'label.used': '占用',
     'label.output': '输出',
     'label.cache': '缓存',
-    'session.new': '＋ 新建',
+    'session.new': '＋ 新建会话',
     'session.untitled': '未命名',
     'session.rename': '重命名',
     'session.delete': '删除',
@@ -49,6 +85,7 @@ const I18N = {
     connected: 'connected',
     reconnecting: 'reconnecting…',
     streaming: 'streaming…',
+    stop: 'Stop',
     you: 'You',
     send: 'Send',
     'placeholder.idle': 'Type a message — Enter to send, Shift+Enter for newline',
@@ -56,6 +93,41 @@ const I18N = {
     'review.title': 'Confirmation needed',
     'review.approve': 'Approve',
     'review.reject': 'Reject',
+    'ask.title': 'Please choose',
+    'ask.single': '(single)',
+    'ask.multi': '(multiple)',
+    'ask.submit': 'Submit',
+    'ask.cancel': 'Cancel',
+    'footer.thinking': 'Thinking',
+    'footer.streaming': 'Responding',
+    'footer.tool': 'Running tool',
+    'footer.error': 'Error',
+    'done.done': 'Done',
+    'done.tools': 'tool calls',
+    welcome: "Hi, I'm deepx-code 👋 Tell me what you need — I'll read, edit and run code for you. Use @ to reference workspace files, Enter to send.",
+    'act.compact': 'Compact',
+    'act.mcp': 'MCP',
+    'act.skill': 'Skills',
+    'mgr.none': 'None',
+    'mgr.add': 'Add',
+    'mgr.delete': 'Delete',
+    'mgr.close': 'Close',
+    'mcp.name': 'Name',
+    'mcp.command': 'Command (stdio, e.g. npx)',
+    'mcp.args': 'Args (space-separated)',
+    'mcp.or': 'or',
+    'mcp.url': 'HTTP URL',
+    'skill.add': 'Install from GitHub URL / local path',
+    'skill.src': 'https://github.com/owner/repo or local path',
+    'skill.installing': 'Installing…',
+    'skill.builtin': 'built-in',
+    'skill.tab.install': 'Install',
+    'skill.tab.installed': 'Installed',
+    'skill.search.title': 'Search Clawhub',
+    'skill.search.ph': 'search skills',
+    'skill.search.btn': 'Search',
+    'skill.searching': 'Searching…',
+    'skill.noresult': 'No results',
     workspace: 'Workspace',
     'panel.vendor': 'Vendor',
     'panel.curmodel': 'Model',
@@ -66,7 +138,7 @@ const I18N = {
     'label.used': 'Used',
     'label.output': 'Output',
     'label.cache': 'Cache',
-    'session.new': '＋ New',
+    'session.new': '＋ New chat',
     'session.untitled': 'untitled',
     'session.rename': 'Rename',
     'session.delete': 'Delete',
@@ -104,6 +176,19 @@ createApp({
       models: { flash: '', pro: '', activeRole: 'flash' },
       workspace: '',
       reviewPending: null,
+      askPending: null, // ask_request 的 questions 数组,null = 无
+      askSel: [],       // [题][选项] 勾选态
+      // 活动状态行(对齐 TUI 输入框上方那条):状态 / 实时耗时 / 工具调用
+      status: 'idle',   // idle | thinking | streaming | tool | error
+      turnStart: 0,     // 本轮起始时间戳(ms)
+      turnElapsed: 0,   // 上一轮总耗时(ms),非 streaming 时显示
+      nowTick: 0,       // 由定时器刷新,驱动 streaming 时的实时耗时
+      // 左栏操作:MCP / Skill 管理弹窗
+      mcpShow: false, mcpList: [], mcpForm: { name: '', command: '', args: '', url: '' },
+      skillShow: false, skillTab: 'installed', skillList: [], skillForm: { src: '' },
+      skillInstalling: false, skillMsg: '', skillErr: false,
+      skillQuery: '', skillResults: [], skillSearching: false, skillSearched: false,
+      toast: '', toastTimer: null, // 顶部临时提示(如压缩完成)
       input: '',
       connected: false,
       openIdx: -1, // 当前流式 assistant 消息下标
@@ -128,9 +213,26 @@ createApp({
     };
   },
   computed: {
-    // 已流式但还没出 token 时显示打字动画
+    // 已流式但还没出 token 时显示打字动画;工具执行中(已有工具条在转)不再叠一个,避免两个卡片框
     thinking() {
-      return this.streaming && this.openIdx < 0;
+      return this.streaming && this.openIdx < 0 && this.status !== 'tool';
+    },
+    // 状态行:实时耗时(streaming 用 now-start,否则用上轮总耗时)+ 当前工具
+    elapsedMs() {
+      return this.streaming ? Math.max(0, this.nowTick - this.turnStart) : this.turnElapsed;
+    },
+    elapsedText() {
+      return this.fmtElapsed(this.elapsedMs);
+    },
+    activeToolName() {
+      for (let i = this.toolCalls.length - 1; i >= 0; i--) {
+        if (this.toolCalls[i].status === 'running') return this.toolCalls[i].name;
+      }
+      return '';
+    },
+    // 状态行是否显示:运行中 / 出错 / 跑过至少一轮(对齐 TUI:启动未跑过时留空)
+    showStatus() {
+      return this.streaming || this.status === 'error' || this.turnElapsed > 0;
     },
     // 当前实际在用的模型名(按活跃角色取 flash / pro)
     activeModel() {
@@ -164,6 +266,9 @@ createApp({
     },
     planIcon(s) {
       return { done: '✓', running: '▶', failed: '✗', blocked: '⏸', pending: ' ' }[s] || ' ';
+    },
+    planDone(list) {
+      return (list || []).filter((p) => p.status === 'done').length;
     },
     toolIcon(s) {
       return { done: '✓', running: '▶', failed: '✗' }[s] || '·';
@@ -320,6 +425,141 @@ createApp({
         body: JSON.stringify({ approve }),
       }).catch(() => {});
     },
+    toggleAsk(qi, oi, multiple) {
+      if (!this.askSel[qi]) return;
+      if (multiple) {
+        this.askSel[qi][oi] = !this.askSel[qi][oi];
+      } else {
+        // 单选:同题互斥
+        this.askSel[qi] = this.askSel[qi].map((_, i) => i === oi);
+      }
+    },
+    async submitAsk() {
+      // 组装成与终端一致的格式:{"answers":[{question, selected:[value...]}]}
+      const answers = (this.askPending || []).map((q, qi) => ({
+        question: q.question,
+        selected: (q.options || [])
+          .filter((_, oi) => this.askSel[qi] && this.askSel[qi][oi])
+          .map(opt => opt.value || opt.label),
+      }));
+      const answer = JSON.stringify({ answers });
+      this.askPending = null;
+      this.askSel = [];
+      await fetch('/api/ask-answer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ answer }),
+      }).catch(() => {});
+    },
+    async cancelAsk() {
+      this.askPending = null;
+      this.askSel = [];
+      await fetch('/api/ask-answer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ answer: '' }),
+      }).catch(() => {});
+    },
+    async interrupt() {
+      // 乐观地先停掉本地 streaming 态;真正中断由后端广播 interrupted 再次确认。
+      this.streaming = false;
+      await fetch('/api/interrupt', { method: 'POST' }).catch(() => {});
+    },
+    // —— 左栏操作:压缩会话 / MCP 管理 / Skill 管理 ——
+    async compact() {
+      if (this.streaming) return;
+      await this.post('/api/compact');
+    },
+    async openMcp() { this.mcpShow = true; await this.loadMcp(); },
+    async loadMcp() {
+      try { const r = await fetch('/api/mcp-list'); this.mcpList = (await r.json()) || []; }
+      catch { this.mcpList = []; }
+    },
+    async addMcp() {
+      const f = this.mcpForm;
+      if (!f.name.trim() || (!f.command.trim() && !f.url.trim())) return;
+      await this.post('/api/mcp-add', {
+        name: f.name.trim(), command: f.command.trim(), args: f.args.trim(), url: f.url.trim(),
+      });
+      this.mcpForm = { name: '', command: '', args: '', url: '' };
+      setTimeout(() => this.loadMcp(), 500); // 等后台落盘 + 连接
+    },
+    async deleteMcp(name) {
+      await this.post('/api/mcp-delete', { name });
+      setTimeout(() => this.loadMcp(), 300);
+    },
+    showToast(text) {
+      if (!text) return;
+      this.toast = text;
+      if (this.toastTimer) clearTimeout(this.toastTimer);
+      this.toastTimer = setTimeout(() => { this.toast = ''; }, 3500);
+    },
+    async openSkill() {
+      this.skillShow = true; this.skillMsg = ''; this.skillTab = 'installed';
+      this.skillResults = []; this.skillSearched = false; this.skillQuery = '';
+      await this.loadSkill();
+    },
+    async searchSkill() {
+      const q = this.skillQuery.trim();
+      if (!q || this.skillSearching) return;
+      this.skillSearching = true; this.skillMsg = '';
+      try {
+        const r = await fetch('/api/skill-search', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query: q }),
+        });
+        const d = await r.json();
+        this.skillResults = d.results || [];
+        if (d.error) { this.skillMsg = '搜索失败: ' + d.error; this.skillErr = true; }
+      } catch { this.skillMsg = '搜索失败'; this.skillErr = true; this.skillResults = []; }
+      this.skillSearched = true; this.skillSearching = false;
+    },
+    async installSource(r) {
+      if (this.skillInstalling) return;
+      this.skillInstalling = true; this.skillMsg = '';
+      try {
+        const resp = await fetch('/api/skill-install-source', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sourceId: r.sourceId, remoteRef: r.remoteRef }),
+        });
+        const d = await resp.json();
+        if (d.ok) { this.skillMsg = '已安装: ' + (d.name || r.name); this.skillErr = false; await this.loadSkill(); }
+        else { this.skillMsg = '失败: ' + (d.error || ''); this.skillErr = true; }
+      } catch { this.skillMsg = '失败'; this.skillErr = true; }
+      this.skillInstalling = false;
+    },
+    async loadSkill() {
+      try { const r = await fetch('/api/skill-list'); this.skillList = (await r.json()) || []; }
+      catch { this.skillList = []; }
+    },
+    async addSkill() {
+      const src = this.skillForm.src.trim();
+      if (!src || this.skillInstalling) return;
+      this.skillInstalling = true; this.skillMsg = '';
+      try {
+        const r = await fetch('/api/skill-install', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ src }),
+        });
+        const d = await r.json();
+        if (d.ok) { this.skillMsg = '已安装: ' + (d.name || src); this.skillErr = false; this.skillForm.src = ''; await this.loadSkill(); }
+        else { this.skillMsg = '失败: ' + (d.error || ''); this.skillErr = true; }
+      } catch { this.skillMsg = '失败'; this.skillErr = true; }
+      this.skillInstalling = false;
+    },
+    async deleteSkill(name) {
+      await this.post('/api/skill-delete', { name });
+      setTimeout(() => this.loadSkill(), 200);
+    },
+    // fmtElapsed 镜像 TUI 的 formatElapsed:<60s → "1.2s";<1h → "1m05s";否则 "1h05m"。
+    fmtElapsed(ms) {
+      if (!ms || ms <= 0) return '0s';
+      const sec = ms / 1000;
+      if (sec < 60) return sec.toFixed(1) + 's';
+      const totalS = Math.floor(sec);
+      const m = Math.floor(totalS / 60);
+      if (m < 60) return m + 'm' + String(totalS % 60).padStart(2, '0') + 's';
+      const h = Math.floor(m / 60);
+      return h + 'h' + String(m % 60).padStart(2, '0') + 'm';
+    },
 
     // 用整份快照重置状态(新连接 / 重连)
     applySnapshot(s) {
@@ -329,9 +569,20 @@ createApp({
       this.toolCalls = s.toolCalls || [];
       this.usage = s.usage || null;
       this.streaming = !!s.streaming;
+      // 重连时无法还原精确起始时刻:streaming 则从现在起计,否则状态置 idle。
+      if (this.streaming) {
+        this.status = 'thinking';
+        this.turnStart = Date.now();
+        this.nowTick = Date.now();
+      } else {
+        this.status = 'idle';
+        this.turnElapsed = 0;
+      }
       this.models = s.models || this.models;
       this.workspace = s.workspace || '';
       this.reviewPending = s.reviewPending || null;
+      this.askPending = (s.askQuestions && s.askQuestions.length) ? s.askQuestions : null;
+      this.askSel = (this.askPending || []).map(q => (q.options || []).map(() => false));
       if (s.lang) this.lang = s.lang;
       if (s.vendor) this.vendor = s.vendor;
       if (s.routing) this.routing = s.routing;
@@ -358,6 +609,11 @@ createApp({
           this.reviewPending = null;
           this.streaming = true;
           this.openIdx = -1;
+          // 状态行:开新一轮,起计时
+          this.status = 'thinking';
+          this.turnStart = Date.now();
+          this.turnElapsed = 0;
+          this.nowTick = Date.now();
           break;
         case 'token':
           if (this.openIdx < 0) {
@@ -365,11 +621,17 @@ createApp({
             this.openIdx = this.messages.length - 1;
           }
           this.messages[this.openIdx].content += ev.text || '';
+          this.status = 'streaming';
           break;
         case 'reasoning_token':
+          this.status = 'thinking';
           break; // 思考过程不入聊天
         case 'tool_call':
           this.toolCalls.push({ id: ev.id, name: ev.name, args: ev.args || '', status: 'running', output: '' });
+          // 内联进对话流;工具后另起 assistant 气泡。
+          this.messages.push({ role: 'tool', id: ev.id, name: ev.name, args: ev.args || '', status: 'running', output: '' });
+          this.openIdx = -1;
+          this.status = 'tool';
           break;
         case 'tool_result': {
           const t = this.toolCalls.find((x) => x.id === ev.id) ||
@@ -377,6 +639,14 @@ createApp({
           if (t) {
             t.status = ev.success ? 'done' : 'failed';
             t.output = ev.output || '';
+          }
+          // 同步对话流里的工具条(同样的配对:id 优先,否则同名 running 兜底)。
+          const mt = [...this.messages].reverse().find(
+            (x) => x.role === 'tool' && (x.id === ev.id || (x.name === ev.name && x.status === 'running'))
+          );
+          if (mt) {
+            mt.status = ev.success ? 'done' : 'failed';
+            mt.output = ev.output || '';
           }
           break;
         }
@@ -404,12 +674,35 @@ createApp({
         case 'error':
           this.streaming = false;
           this.openIdx = -1;
+          // 冻结本轮总耗时,状态切到 完成 / 出错
+          if (this.turnStart) this.turnElapsed = Date.now() - this.turnStart;
+          this.status = ev.kind === 'error' ? 'error' : 'idle';
           break;
         case 'review_request':
           this.reviewPending = { name: ev.name, args: ev.args || '' };
           break;
         case 'review_resolved':
           this.reviewPending = null;
+          break;
+        case 'ask_request':
+          this.askPending = ev.questions || null;
+          this.askSel = (ev.questions || []).map(q => (q.options || []).map(() => false));
+          break;
+        case 'ask_resolved':
+          this.askPending = null;
+          this.askSel = [];
+          break;
+        case 'interrupted':
+          this.streaming = false;
+          this.openIdx = -1;
+          this.reviewPending = null;
+          this.askPending = null;
+          this.askSel = [];
+          if (this.turnStart) this.turnElapsed = Date.now() - this.turnStart;
+          this.status = 'idle';
+          break;
+        case 'notice':
+          this.showToast(ev.text || '');
           break;
         case 'lang':
           if (ev.text) this.lang = ev.text;
@@ -445,6 +738,9 @@ createApp({
           this.reviewPending = null;
           this.streaming = false;
           this.openIdx = -1;
+          // 复位状态行,避免残留上一会话的"完成 · 用时"
+          this.status = 'idle';
+          this.turnElapsed = 0;
           break;
       }
       this.scrollDown();
@@ -492,5 +788,7 @@ createApp({
     this.connect();
     // 点菜单以外的任何地方关闭"…"菜单(菜单按钮 / 菜单本身用 @click.stop 不会冒泡到这里)。
     document.addEventListener('click', () => { this.menuOpen = null; });
+    // 状态行实时耗时:streaming 时每 250ms 刷新一次 nowTick 驱动重算。
+    setInterval(() => { if (this.streaming) this.nowTick = Date.now(); }, 250);
   },
 }).mount('#app');

@@ -205,6 +205,16 @@ type model struct {
 	reviewToolArgs string
 	reviewYesNo    bool // true=YES, false=NO
 
+	// AskUser 选择题弹窗状态(LLM 主动发起,复用 review 的阻塞-恢复骨架)。
+	// askPending=true 时路由按键到弹窗。askSelected[题][选项] 是勾选态。
+	askPending   bool
+	askCh        chan string
+	askQuestions []agent.AskQuestion
+	askSelected  [][]bool
+	askQIdx      int  // 当前题
+	askOptIdx    int  // 当前题内的选项光标
+	askWarn      bool // 当前题没选就按了回车 → 显示红色闪烁提示,提醒用空格选
+
 	// /lang 选择 modal 状态。showLangModal=true 时全屏路由按键到 modal,
 	// langModalIdx ∈ {0:zh, 1:en}。
 	showLangModal bool
@@ -319,6 +329,49 @@ type webInputMsg struct{ text string }
 
 // webReviewMsg 是浏览器的 review 确认,经 program.Send 注入,复用终端同一个 ReviewCh(先到先得)。
 type webReviewMsg struct{ approve bool }
+
+// webAskAnswerMsg 是浏览器对 AskUser 选择题的作答(answer = 答案 JSON),复用终端同一个 askCh(先到先得)。
+type webAskAnswerMsg struct{ answer string }
+
+// webInterruptMsg 是浏览器点"停止":中断当前执行,等价于终端按 Esc。
+type webInterruptMsg struct{}
+
+// 左栏操作:压缩会话 / MCP 增删(经 program.Send 注入,走相同 Update)。
+type webCompactMsg struct{}
+type webMcpAddMsg struct{ cfg mcp.ServerConfig }
+type webMcpDeleteMsg struct{ name string }
+
+// interruptStream 中断当前后台 agent:取消 context(真正终止 HTTP 请求与工具调用)、
+// 清理 review/ask 的等待通道防 goroutine 泄漏、drain channel、复位为 idle,并广播 interrupted
+// 让浏览器端同步停下(取消时 agent 因 context.Canceled 静默 return,不会自己发 done/error)。
+// 终端 Esc 与浏览器"停止"共用这一段。调用前应确认 m.streaming && m.streamCh != nil。
+func (m model) interruptStream() model {
+	if m.cancelAgent != nil {
+		m.cancelAgent()
+		m.cancelAgent = nil
+	}
+	if m.reviewPending && m.reviewCh != nil {
+		m.reviewCh <- false
+		m.reviewPending = false
+		m.reviewCh = nil
+	}
+	if m.askPending && m.askCh != nil {
+		m.askCh <- ""
+		m.askPending = false
+		m.askCh = nil
+	}
+	if m.streamCh != nil {
+		drainAndDiscard(m.streamCh)
+		m.streamCh = nil
+	}
+	m.streaming = false
+	m.thinking = false
+	m.status = "idle"
+	m.chatContent.Append(T("misc.interrupted"))
+	m.queuedInput = nil // 中止本轮 → 丢弃排队消息,不再自动续发
+	m.broadcast(web.Event{Kind: "interrupted"})
+	return m
+}
 
 // 控制类 web 消息:浏览器点按钮经 program.Send 注入,复用终端同一套切换逻辑。
 type webNewSessionMsg struct{}                      // 新建会话
@@ -750,15 +803,39 @@ func (m model) broadcastSessionLoaded() {
 	if m.hub == nil {
 		return
 	}
+	// 工具结果:历史里 tool 角色消息按 ToolCallID 携带输出,先建映射供工具条还原。
+	toolOut := map[string]string{}
+	for _, h := range m.history {
+		if h.Role == "tool" && h.ToolCallID != "" {
+			toolOut[h.ToolCallID] = h.Content
+		}
+	}
 	msgs := make([]web.Message, 0, len(m.history))
 	for _, h := range m.history {
-		if h.Role != "user" && h.Role != "assistant" {
-			continue // 工具 / 系统消息不进 web 聊天区
+		switch h.Role {
+		case "user":
+			if strings.TrimSpace(h.Content) == "" {
+				continue
+			}
+			msgs = append(msgs, web.Message{Role: "user", Content: h.Content})
+		case "assistant":
+			if strings.TrimSpace(h.Content) != "" {
+				msgs = append(msgs, web.Message{Role: "assistant", Content: h.Content})
+			}
+			// 还原该 assistant 消息发起的工具调用,内联到对话流。
+			// 历史不存 success 标志,统一按已完成("done")展示。
+			for _, tc := range h.ToolCalls {
+				msgs = append(msgs, web.Message{
+					Role:   "tool",
+					ID:     tc.ID,
+					Name:   tc.Function.Name,
+					Args:   tc.Function.Arguments,
+					Status: "done",
+					Output: toolOut[tc.ID],
+				})
+			}
 		}
-		if strings.TrimSpace(h.Content) == "" {
-			continue
-		}
-		msgs = append(msgs, web.Message{Role: h.Role, Content: h.Content})
+		// 其余(tool 结果 / system)不单独成行:tool 结果已并入上面的工具条。
 	}
 	m.broadcast(web.Event{Kind: "session_loaded", Messages: msgs})
 }
@@ -804,7 +881,10 @@ func (m model) submitUserInput(input string) (model, tea.Cmd) {
 	m.appendChat("You", input)
 	m.history = append(m.history, userMsg)
 	// 对话还没标题时,用首条用户输入当标题(给 /sessions 列表显示)。
-	m.maybeSetConvTitle(input)
+	// 设了新标题就立刻把会话列表推给 web,否则浏览器一直显示"未命名",要切回来才更新。
+	if m.maybeSetConvTitle(input) {
+		m.broadcastSessions()
+	}
 	// 用户输入先暂存,本轮成功后(StreamDoneMsg)才写 jsonl —— 失败的轮次不留孤儿记录。
 	m.pendingUserText = input
 	m.broadcast(web.Event{Kind: "user_message", Text: input})
@@ -918,9 +998,59 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case webAskAnswerMsg:
+		// 浏览器对 AskUser 选择题的作答,复用终端同一个 askCh(先到先得)。
+		if m.askPending {
+			m.askCh <- msg.answer
+			m.askPending = false
+			m.broadcast(web.Event{Kind: "ask_resolved"})
+			m.refreshViewport()
+			return m, func() tea.Msg { return reviewResultMsg{} }
+		}
+		return m, nil
+
+	case webInterruptMsg:
+		// 浏览器点"停止":等价于终端按 Esc,中断当前执行。
+		if m.streaming && m.streamCh != nil {
+			m = m.interruptStream()
+			m.refreshViewport()
+			return m, nil
+		}
+		return m, nil
+
+	case webCompactMsg:
+		// 浏览器点"压缩会话":等价于 /compact。
+		return m, m.startManualCompaction()
+
+	case webMcpAddMsg:
+		// 浏览器添加 MCP server:落盘 + 后台连接,刷新工具集。
+		if err := mcp.AddServer(msg.cfg); err != nil {
+			m.appendChat("System", "添加 MCP 失败:"+err.Error())
+		} else {
+			m.appendChat("System", fmt.Sprintf("已添加 MCP server「%s」,正在连接…", msg.cfg.Name))
+			if m.mcpMgr != nil {
+				cfg := msg.cfg
+				go m.mcpMgr.Connect(cfg)
+			}
+		}
+		return m, nil
+
+	case webMcpDeleteMsg:
+		// 浏览器删除 MCP server:落盘删除 + 断连。
+		if _, err := mcp.DeleteServer(msg.name); err != nil {
+			m.appendChat("System", "删除 MCP 失败:"+err.Error())
+		} else {
+			m.appendChat("System", fmt.Sprintf("已删除 MCP server「%s」。", msg.name))
+			if m.mcpMgr != nil {
+				m.mcpMgr.Disconnect(msg.name)
+			}
+		}
+		return m, nil
+
 	case webNewSessionMsg:
 		// 浏览器点"新建会话":复用终端 /new 逻辑;loadCurrentConversation 会广播新会话态。
 		m.startNewConversation()
+		m.refreshViewport() // 确保终端侧立即重绘出新会话(含 session.new 欢迎行)
 		return m, nil
 
 	case webSwitchSessionMsg:
@@ -1597,6 +1727,80 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
+		// AskUser 选择题:↑↓ 移光标,空格勾选(单选互斥),←→ 切题,Enter 下一题/最后一题提交,Esc 取消。
+		// 选中只认空格;没选就按回车 → 红色闪烁提示,不前进/提交,逼用户记住用空格选。
+		if m.askPending {
+			q := m.askQuestions[m.askQIdx]
+			switch msg.String() {
+			case "up", "k":
+				if m.askOptIdx > 0 {
+					m.askOptIdx--
+				}
+				m.refreshViewport()
+				return m, nil
+			case "down", "j":
+				if m.askOptIdx < len(q.Options)-1 {
+					m.askOptIdx++
+				}
+				m.refreshViewport()
+				return m, nil
+			case " ", "space":
+				if q.Multiple {
+					m.askSelected[m.askQIdx][m.askOptIdx] = !m.askSelected[m.askQIdx][m.askOptIdx]
+				} else {
+					for i := range m.askSelected[m.askQIdx] {
+						m.askSelected[m.askQIdx][i] = false
+					}
+					m.askSelected[m.askQIdx][m.askOptIdx] = true
+				}
+				m.askWarn = false // 已用空格选,撤掉提示
+				m.refreshViewport()
+				return m, nil
+			case "left", "h":
+				if m.askQIdx > 0 {
+					m.askQIdx--
+					m.askOptIdx = 0
+					m.askWarn = false
+				}
+				m.refreshViewport()
+				return m, nil
+			case "right", "l":
+				if m.askQIdx < len(m.askQuestions)-1 {
+					m.askQIdx++
+					m.askOptIdx = 0
+					m.askWarn = false
+				}
+				m.refreshViewport()
+				return m, nil
+			case "enter":
+				// 当前题必须先用空格选;没选就回车 → 亮红提示,原地不动。
+				if !askQuestionAnswered(m.askSelected[m.askQIdx]) {
+					m.askWarn = true
+					m.refreshViewport()
+					return m, m.spinner.Tick // 确保后续 tick 驱动闪烁
+				}
+				m.askWarn = false
+				if m.askQIdx < len(m.askQuestions)-1 {
+					m.askQIdx++
+					m.askOptIdx = 0
+					m.refreshViewport()
+					return m, nil
+				}
+				m.askCh <- m.buildAskAnswer()
+				m.askPending = false
+				m.broadcast(web.Event{Kind: "ask_resolved"})
+				m.refreshViewport()
+				return m, func() tea.Msg { return reviewResultMsg{} }
+			case "esc", "ctrl+c":
+				m.askCh <- ""
+				m.askPending = false
+				m.broadcast(web.Event{Kind: "ask_resolved"})
+				m.refreshViewport()
+				return m, func() tea.Msg { return reviewResultMsg{} }
+			}
+			return m, nil
+		}
+
 		// review 审核态:↑/↓ 切换 YES/NO, Enter 确认, Esc 拒绝
 		if m.reviewPending {
 			switch msg.String() {
@@ -1808,25 +2012,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			// Esc 中断当前对话。取消 context 真正终止后台 HTTP 请求和工具调用,
-			// 然后 drain channel 防止 goroutine 阻塞。
+			// 然后 drain channel 防止 goroutine 阻塞(与浏览器"停止"共用 interruptStream)。
 			if m.streaming && m.streamCh != nil {
-				if m.cancelAgent != nil {
-					m.cancelAgent()
-					m.cancelAgent = nil
-				}
-				// 清理 reviewCh,防止 agent goroutine 泄漏
-				if m.reviewPending && m.reviewCh != nil {
-					m.reviewCh <- false
-					m.reviewPending = false
-					m.reviewCh = nil
-				}
-				drainAndDiscard(m.streamCh)
-				m.streamCh = nil
-				m.streaming = false
-				m.thinking = false
-				m.status = "idle"
-				m.chatContent.Append(T("misc.interrupted"))
-				m.queuedInput = nil // 中止本轮 → 丢弃排队消息,不再自动续发
+				m = m.interruptStream()
 				// 打断后把这一轮的用户输入回填到空输入框,方便改一下重发。
 				// pendingUserText 是本轮原文(StreamDoneMsg 成功后才清空,所以打断时仍在);
 				// 仅当输入框为空时回填,不覆盖用户已敲入的新内容。
@@ -1959,7 +2147,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Todo 是可见清单的「全量快照更新」,不是一次干活动作:清单本身由下方 live overlay
 		// 实时勾选,每次更新再往 chat 打一行 "📌 Todo" 是纯噪音。所以 Todo 不留 chat 行、
 		// 也不计入"N 次工具调用"。其余工具照旧:紧凑单行 <icon> Name (主参数)。
-		if msg.Name != "Todo" {
+		if msg.Name != "Todo" && msg.Name != "AskUser" {
 			m.turnToolCalls++
 			m.activeTool = msg.Name
 			line := formatToolCallLine(msg.Name, msg.Args)
@@ -1992,6 +2180,27 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(append(cmds, agent.ListenToStream(m.streamCh))...)
 
+	case agent.AskUserMsg:
+		if m.streamCh == nil {
+			return m, nil
+		}
+		// 暂停流监听,弹选择框等用户勾选(同 review 的暂停-恢复骨架)。
+		m.askPending = true
+		m.askCh = msg.ResponseCh
+		m.askQuestions = msg.Questions
+		m.askQIdx = 0
+		m.askOptIdx = 0
+		m.askWarn = false
+		m.askSelected = make([][]bool, len(msg.Questions))
+		for i, q := range msg.Questions {
+			m.askSelected[i] = make([]bool, len(q.Options))
+		}
+		m.status = "tool"
+		// 同步给浏览器:web 端也弹同样的选择框。
+		m.broadcast(web.Event{Kind: "ask_request", Questions: msg.Questions})
+		m.refreshViewport()
+		return m, nil
+
 	case agent.ToolCallResultMsg:
 		if m.streamCh == nil {
 			return m, nil
@@ -2015,10 +2224,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(append(cmds, agent.ListenToStream(m.streamCh))...)
 
 	case spinner.TickMsg:
-		// spinner 自驱动:每次 tick 来都更新 frame,只要还在 thinking 就继续 Tick
+		// spinner 自驱动:每次 tick 来都更新 frame,只要还在 thinking 就继续 Tick。
+		// AskUser 的红色提示在闪烁时也需要持续 tick 驱动重渲染。
 		var c tea.Cmd
 		m.spinner, c = m.spinner.Update(msg)
-		if m.thinking {
+		if m.thinking || (m.askPending && m.askWarn) {
 			cmds = append(cmds, c)
 		}
 		// thinking 状态下需要重渲染让 spinner 帧切换可见
@@ -2292,6 +2502,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.manual {
 				m.chatContent.Open(kindSystem, "**压缩跳过**:"+msg.err.Error())
 				m.refreshViewport()
+				m.broadcast(web.Event{Kind: "notice", Text: "压缩跳过:" + msg.err.Error()})
 			}
 			// 压缩失败也别把排队消息卡住,照常发出下一条。
 			if next, qcmd, ok := m.popQueuedInput(); ok {
@@ -2339,6 +2550,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		m.chatContent.Open(kindSystem, fmt.Sprintf("**已压缩会话历史（%d 轮→摘要）**", msg.compressedTurns))
 		m.refreshViewport()
+		m.broadcast(web.Event{Kind: "notice", Text: fmt.Sprintf("已压缩会话历史（%d 轮 → 摘要）", msg.compressedTurns)})
 		// 压缩完成,现在在更小的上下文上发出排队的下一条(StreamDoneMsg 把它推迟到了这里)。
 		if next, qcmd, ok := m.popQueuedInput(); ok {
 			return next, qcmd

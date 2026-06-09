@@ -24,6 +24,22 @@ var builtinVersion = "dev"
 // skill 从不写进清单,所以永远不会被这套清理逻辑碰到。
 const manifestFile = ".builtin_manifest"
 
+// BuiltinNames 返回当前随二进制 embed 的内置 skill 名字集合。
+// 供 UI 判断某 skill 是否内置(内置不可删,只能随升级更新)。
+func BuiltinNames() map[string]bool {
+	out := map[string]bool{}
+	entries, err := builtinFS.ReadDir("skills")
+	if err != nil {
+		return out
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			out[e.Name()] = true
+		}
+	}
+	return out
+}
+
 // ExtractBuiltins 将内嵌 skill 解压到 ~/.deepx/skills/。
 // 通过版本文件判断是否需要更新，避免每次启动都写盘。
 // 用户自定义 skill 不受影响（只覆盖同名内置 skill）；被移除的内置 skill 会按清单差集删除。

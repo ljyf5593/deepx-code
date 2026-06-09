@@ -45,6 +45,9 @@ type Event struct {
 	// review_request / review_resolved
 	Approve *bool `json:"approve,omitempty"`
 
+	// ask_request(LLM 发起的选择题弹窗);ask_resolved 时为空
+	Questions []agent.AskQuestion `json:"questions,omitempty"`
+
 	// sessions(会话列表)/ session_loaded(切换会话后载入的消息)
 	Sessions []SessionInfo `json:"sessions,omitempty"`
 	Messages []Message     `json:"messages,omitempty"`
