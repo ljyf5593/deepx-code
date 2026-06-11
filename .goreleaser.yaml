@@ -15,7 +15,9 @@ builds:
     main: ./
     binary: deepx
     env:
-      # 完全无 cgo:OCR 走 purego 运行时 dlopen,编译期不依赖 C 工具链,5 平台一份 runner 全搞定。
+      # 不依赖 C 工具链:OCR 走 purego 运行时 dlopen,一份 runner 全搞定。
+      # 注意:purego 用 cgo_import_dynamic,linux 产物仍是 glibc 动态链接(非纯静态),
+      # 因此 Alpine/musl 上需 gcompat+libc6-compat 兼容层(见 install.sh 与 issue #99)。
       - CGO_ENABLED=0
     goos:
       - darwin

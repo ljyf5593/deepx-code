@@ -139,6 +139,27 @@ fi
 success "Platform: ${OS}/${ARCH}"
 
 # ---------------------------------------------------------------------------
+# Step 1.5: Alpine / musl 兼容层
+# 预编译 linux 二进制是 glibc 动态链接 —— OCR 经 purego 在运行时 dlopen,链接器据此产出
+# 动态可执行(即便 CGO_ENABLED=0 也非纯静态)。Alpine 用 musl,缺 glibc 解释器
+# /lib64/ld-linux-*.so → 装好也跑不起来(见 issue #99)。装 gcompat + libc6-compat
+# 提供 glibc 兼容层即可正常运行(已实测)。
+# ---------------------------------------------------------------------------
+if [ "$OS" = "linux" ] && { [ -f /etc/alpine-release ] || ldd --version 2>&1 | grep -qi musl; }; then
+    warn "检测到 musl libc(Alpine 等):deepx 预编译二进制为 glibc 动态链接,需 glibc 兼容层才能运行。"
+    if command -v apk &>/dev/null; then
+        info "安装兼容层:apk add gcompat libc6-compat"
+        if apk add --no-cache gcompat libc6-compat >/dev/null 2>&1; then
+            success "已安装 gcompat + libc6-compat"
+        else
+            warn "自动安装失败(可能非 root / 无网络)。请手动执行:  apk add gcompat libc6-compat"
+        fi
+    else
+        warn "未找到 apk。请用所在发行版的包管理器安装 glibc 兼容层(Alpine:apk add gcompat libc6-compat)。"
+    fi
+fi
+
+# ---------------------------------------------------------------------------
 # Step 2: 检测必备工具
 # ---------------------------------------------------------------------------
 step "Checking required tools"
