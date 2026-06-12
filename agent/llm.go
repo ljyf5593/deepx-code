@@ -492,7 +492,7 @@ func BuildSystemPrompt(workspace, skillCatalog, summary string) string {
 		base += "\n\n# 用户偏好 / 项目约定(持久记忆,需严格遵循)\n" + prefs
 	}
 	if summary != "" {
-		base += "\n\n# 会话摘要(此前对话的压缩,延续上下文)\n" + summary
+		base += "\n\n# 当前工作状态(checkpoint,此前对话的压缩,延续上下文)\n" + summary
 	}
 	return base
 }
