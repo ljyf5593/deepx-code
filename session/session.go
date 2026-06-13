@@ -71,6 +71,10 @@ type stateFile struct {
 	WorkingMode string         `json:"working_mode,omitempty"` // 工作模式 kp/openspec/sp(按会话保存,切会话时同步)。空 = 默认 kp
 	ModelPin    string         `json:"model_pin,omitempty"`    // /model 锁定 auto/flash/pro(按子会话保存,切会话时同步)。空 = auto
 
+	// ShadowCut 影子热压(shadow checkpoint)的切点 —— history[:ShadowCut] 已被压进 shadow 文件,
+	// history[ShadowCut:] 是保留尾部。仅 >1h 冷重启时应用(见 tui 重启加载),0 = 无影子。
+	ShadowCut int `json:"shadow_cut,omitempty"`
+
 	// Summary 已迁出到独立裸文件;此字段仅用于读取旧版本遗留的 state.json(向后兼容)。
 	Summary string `json:"summary,omitempty"`
 }
@@ -84,6 +88,7 @@ const (
 	summaryFile    = "summary"
 	lastPromptFile = "last_prompt"
 	lastToolsFile  = "last_tools"
+	shadowFile     = "shadow" // 影子热压 checkpoint 文本(切点存 state.json 的 ShadowCut)
 )
 
 // writeRaw 原子写一个对话级裸文件(write-then-rename)到 convDir。失败静默。
@@ -206,20 +211,55 @@ func (m *Manager) SaveSummary(text string) error {
 	return nil
 }
 
-// SavePrefixSnapshot 记录"上次实际发送"的前缀快照:签名进 state.json,system 文本和 tool specs
-// 各进裸文件(避免高频整体重写大 JSON + tool specs 二次转义)。失败静默,不影响主流程。
-func (m *Manager) SavePrefixSnapshot(sig, model, systemPrompt, toolSpecsJSON string) {
-	m.writeRaw(lastPromptFile, systemPrompt)
-	m.writeRaw(lastToolsFile, toolSpecsJSON)
+// SaveShadow 保存影子热压结果:checkpoint 文本进裸文件,切点进 state.json。
+// 影子是"预先算好、推迟到 >1h 冷重启才应用的压缩",不影响实时会话。
+func (m *Manager) SaveShadow(checkpoint string, cut int) {
+	m.writeRaw(shadowFile, checkpoint)
+	m.setShadowCut(cut)
+}
+
+// ClearShadow 清掉影子(实时压缩落地后调用 —— 实时状态已是更新的 checkpoint+tail,影子作废)。
+func (m *Manager) ClearShadow() {
+	m.writeRaw(shadowFile, "")
+	m.setShadowCut(0)
+}
+
+// LoadShadow 读影子热压结果;无影子返回 ("", 0)。
+func (m *Manager) LoadShadow() (checkpoint string, cut int) {
+	checkpoint = m.readRaw(shadowFile)
+	if data, err := os.ReadFile(filepath.Join(m.convDir, "state.json")); err == nil {
+		var s stateFile
+		if json.Unmarshal(data, &s) == nil {
+			cut = s.ShadowCut
+		}
+	}
+	return checkpoint, cut
+}
+
+// setShadowCut 读改写 state.json 的 ShadowCut(只在主 goroutine 的 Update 里调,无并发)。
+func (m *Manager) setShadowCut(cut int) {
+	m.updateState(func(s *stateFile) { s.ShadowCut = cut })
+}
+
+// updateState 对 state.json 做读-改-写:读当前内容 → fn 改自己那个字段 → 写回。这些小而高频的
+// 字段共用一个文件;只在主 goroutine(Update)里调,无并发。失败静默,不影响主流程。
+func (m *Manager) updateState(fn func(*stateFile)) {
 	path := filepath.Join(m.convDir, "state.json")
 	var s stateFile
 	if data, err := os.ReadFile(path); err == nil {
 		_ = json.Unmarshal(data, &s)
 	}
-	s.PrefixSig = sig
-	s.PrefixModel = model
-	data, _ := json.MarshalIndent(s, "", "  ")
+	fn(&s)
+	data, _ := json.MarshalIndent(&s, "", "  ")
 	_ = os.WriteFile(path, data, 0o644)
+}
+
+// SavePrefixSnapshot 记录"上次实际发送"的前缀快照:签名进 state.json,system 文本和 tool specs
+// 各进裸文件(避免高频整体重写大 JSON + tool specs 二次转义)。失败静默,不影响主流程。
+func (m *Manager) SavePrefixSnapshot(sig, model, systemPrompt, toolSpecsJSON string) {
+	m.writeRaw(lastPromptFile, systemPrompt)
+	m.writeRaw(lastToolsFile, toolSpecsJSON)
+	m.updateState(func(s *stateFile) { s.PrefixSig = sig; s.PrefixModel = model })
 }
 
 // PrefixSnapshotTime 返回前缀快照(last_prompt)最后写入的时间,即"上次请求实际发送"的时刻 ——
@@ -248,19 +288,14 @@ func (m *Manager) LoadPrefixSnapshot() (sig, model, systemPrompt, toolSpecsJSON 
 // SaveUsage 写入 last_usage 字段。失败静默,不影响主流程。
 // 复用 state.json,避免再多一个文件。
 func (m *Manager) SaveUsage(promptTokens, completionTokens, cacheHit, cacheMiss int) {
-	path := filepath.Join(m.convDir, "state.json")
-	var s stateFile
-	if data, err := os.ReadFile(path); err == nil {
-		_ = json.Unmarshal(data, &s)
-	}
-	s.LastUsage = &usageSnapshot{
-		PromptTokens:          promptTokens,
-		CompletionTokens:      completionTokens,
-		PromptCacheHitTokens:  cacheHit,
-		PromptCacheMissTokens: cacheMiss,
-	}
-	data, _ := json.MarshalIndent(s, "", "  ")
-	_ = os.WriteFile(path, data, 0o644)
+	m.updateState(func(s *stateFile) {
+		s.LastUsage = &usageSnapshot{
+			PromptTokens:          promptTokens,
+			CompletionTokens:      completionTokens,
+			PromptCacheHitTokens:  cacheHit,
+			PromptCacheMissTokens: cacheMiss,
+		}
+	})
 }
 
 // LoadUsage 读 last_usage 字段。文件/字段缺失返回 nil。
@@ -279,14 +314,7 @@ func (m *Manager) LoadUsage() *Usage {
 
 // SaveWorkingMode 写入工作模式到 state.json(按会话持久化)。失败静默。
 func (m *Manager) SaveWorkingMode(mode string) {
-	path := filepath.Join(m.convDir, "state.json")
-	var s stateFile
-	if data, err := os.ReadFile(path); err == nil {
-		_ = json.Unmarshal(data, &s)
-	}
-	s.WorkingMode = mode
-	data, _ := json.MarshalIndent(s, "", "  ")
-	_ = os.WriteFile(path, data, 0o644)
+	m.updateState(func(s *stateFile) { s.WorkingMode = mode })
 }
 
 // LoadWorkingMode 读工作模式;缺失返回空串(调用方归一为默认 kp)。
@@ -305,14 +333,7 @@ func (m *Manager) LoadWorkingMode() string {
 
 // SaveModelPin 写入 /model 锁定到当前子会话的 state.json。失败静默。
 func (m *Manager) SaveModelPin(pin string) {
-	path := filepath.Join(m.convDir, "state.json")
-	var s stateFile
-	if data, err := os.ReadFile(path); err == nil {
-		_ = json.Unmarshal(data, &s)
-	}
-	s.ModelPin = pin
-	data, _ := json.MarshalIndent(s, "", "  ")
-	_ = os.WriteFile(path, data, 0o644)
+	m.updateState(func(s *stateFile) { s.ModelPin = pin })
 }
 
 // LoadModelPin 读 /model 锁定;缺失返回空串(调用方归一为默认 auto)。

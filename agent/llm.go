@@ -623,10 +623,13 @@ func StartStream(
 			}
 			// 按本轮模型支不支持视觉,即时把带图消息渲染成 base64 或 路径+OCR(见 renderConvoImages)。
 			// 只渲染发出去的副本,convo 规范形态(只存路径)不变。
+			// 渲染后的副本才是真正发出的输入 —— max_tokens 夹取按它估算(渲染会追加 OCR 文本等,
+			// 比规范 convo 大;按规范估会低估输入、夹不住,仍可能爆窗)。
+			rendered := renderConvoImages(renderWorkingMode(convo, workingMode), currentEntry.Vision)
 			assistantContent, reasoning, toolCalls, finishReason, usage, err := streamOnce(
 				ctx,
 				currentEntry.APIKey, currentEntry.BaseURL, currentEntry.Model,
-				renderConvoImages(renderWorkingMode(convo, workingMode), currentEntry.Vision), currentEntry.MaxTokens, toolSpecs,
+				rendered, clampMaxTokens(currentEntry.MaxTokens, currentEntry.ContextWindow, rendered), toolSpecs,
 				currentEntry.ReasoningEffort, currentEntry.Thinking,
 				ch,
 			)
@@ -636,10 +639,11 @@ func StartStream(
 			if err != nil && isImageInputUnsupported(err) {
 				currentEntry.Vision = false
 				ch <- VisionUnsupportedMsg{Model: currentEntry.Model, BaseURL: currentEntry.BaseURL}
+				rendered := renderConvoImages(renderWorkingMode(convo, workingMode), false)
 				assistantContent, reasoning, toolCalls, finishReason, usage, err = streamOnce(
 					ctx,
 					currentEntry.APIKey, currentEntry.BaseURL, currentEntry.Model,
-					renderConvoImages(renderWorkingMode(convo, workingMode), false), currentEntry.MaxTokens, toolSpecs,
+					rendered, clampMaxTokens(currentEntry.MaxTokens, currentEntry.ContextWindow, rendered), toolSpecs,
 					currentEntry.ReasoningEffort, currentEntry.Thinking,
 					ch,
 				)
@@ -954,6 +958,32 @@ func countPendingTodos(todo []PlanItem) int {
 		}
 	}
 	return n
+}
+
+// clampMaxTokens 把单次输出预算(max_tokens)夹进窗口:input + max_tokens 不得超过模型上限,
+// 否则即便输入远没满,API 也会以 400 "maximum context length ... you requested ..." 拒掉
+// (input 65% + 默认 384K max_tokens 就能在 1M 窗口下溢出)。
+//
+//	maxTokens=0(走模型默认)或 ctxWin<=0(窗口未知)→ 不夹。
+//	否则 max_tokens = min(配置值, 窗口 − 估算输入 − 5% 边际)。
+//
+// 5% 边际吸收 token 估算误差(实测 ~2.5%)+ 配置窗口与模型真实上限的零头。
+func clampMaxTokens(maxTokens, ctxWin int, convo []ChatMessage) int {
+	if maxTokens <= 0 || ctxWin <= 0 {
+		return maxTokens
+	}
+	inputEst := 0
+	for i := range convo {
+		inputEst += MsgTokens(convo[i])
+	}
+	avail := ctxWin - inputEst - ctxWin/20
+	if avail < maxTokens {
+		if avail < 1 {
+			return 1 // 输入已逼近窗口:夹到最小让请求发得出去(真问题靠压缩解决,不在这)
+		}
+		return avail
+	}
+	return maxTokens
 }
 
 func streamOnce(

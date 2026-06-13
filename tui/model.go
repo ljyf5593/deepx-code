@@ -190,9 +190,22 @@ type model struct {
 	pendingCompactSys   string
 	pendingCompactTools string
 
-	// compacting:压缩 Cmd 在飞时为 true。三个触发点(70%/重启/空闲)都 gate 在它上,
+	// compacting:压缩 Cmd 在飞时为 true。三个触发点(80%/重启/空闲)都 gate 在它上,
 	// 防止并发压缩(否则第二个结果的 cutIdx 会越界已截断的 history → panic)。
 	compacting bool
+
+	// compactingFG:仅手动 /compact 期间为 true —— 前台阻塞式压缩。footer 显示 spinner「压缩中…」,
+	// 期间挡住普通消息提交,避免后台异步时用户又发消息、与压缩截断 history 抢同一段。自动压缩不置此位(仍后台)。
+	compactingFG bool
+
+	// 影子热压(shadow checkpoint):轮末上下文跨过 shadowPoints(30/45/60%)时,后台预算一份 checkpoint+cut
+	// 存盘(不改实时态、不重建 system prompt),供 >1h 冷重启时用,省冷 prefill 全量历史。
+	//   - shadowing:影子 Cmd 在飞时为 true,防并发影子。
+	//   - shadowDonePct:已影子到的最高档(0/30/45/60);实时压缩落地后重置 0。
+	//   - compactGen:实时压缩代数,影子结果带它回来比对,过期(实时压缩已发生)则丢弃。
+	shadowing     bool
+	shadowDonePct int
+	compactGen    int
 
 	// pendingUserText:本轮用户输入原文,发送时暂存、本轮成功后才写入 jsonl(连同 assistant)。
 	// 这样 503/失败/取消的轮次不会在 jsonl 里留下没有回复的孤儿 user 记录。
@@ -396,6 +409,22 @@ type compressionResultMsg struct {
 	manual          bool // true = /compact 手动触发:失败要给用户反馈,而非像后台触发那样静默
 }
 
+// shadowResultMsg 影子热压完成后的结果。只存盘、不改实时态;gen 用于丢弃过期结果。
+type shadowResultMsg struct {
+	checkpoint string
+	cut        int
+	gen        int // 触发时的 compactGen;回来时若与当前不符,说明期间发生过实时压缩,丢弃
+	err        error
+}
+
+// compactTriggerPct 实时会话压缩触发阈值(上下文用量占窗口的百分比)。与 agent 包轮内 auto-compact
+// 对齐到 80%:留 20% 给本轮输出;1M 窗口下也有充足 headroom。
+const compactTriggerPct = 80
+
+// shadowPoints 影子热压的触发档位(上下文用量百分比)。30 起步而非 20:keepTarget 也是 20%,
+// 在 20% 处 history < keepTarget 会被 RunCompression 拒(白跑);30% 起 history 才够压。
+var shadowPoints = []int{30, 45, 60}
+
 func initialModel(models agent.ModelConfig, needsSetup bool, version string, hub *web.Hub, srv *web.Server, webURL string) model {
 	vp := viewport.New()
 	vp.MouseWheelDelta = mouseWheelDelta()
@@ -597,6 +626,9 @@ func initialModel(models agent.ModelConfig, needsSetup bool, version string, hub
 				}
 			}
 		}
+
+		// 注:">1h 缓存已凉则套用影子"统一在「提交新一轮」时判断(见 applyStaleShadow)——
+		// 重启只是"产生 >1h 间隔"的一种情况,和挂机回来走同一逻辑;且不到真发请求不截断。
 
 		// 只有默认对话(= rootDir)才用 workspace 级 JSONL 兜底恢复;/new 出来的新对话没自己的
 		// history.gob 时就该是空的,不能去捞共享 JSONL 里别的对话的内容(否则新会话显示旧内容)。
@@ -861,6 +893,32 @@ func (m model) popQueuedInput() (model, tea.Cmd, bool) {
 	return m, cmd, true
 }
 
+// applyStaleShadow 在「提交新一轮」前调用:若距上次请求 > cacheWarmWindow(DeepSeek 前缀缓存大概率
+// 已凉),且有会话中趁热预存的影子 checkpoint(且尚未套用),就把它落地——m.summary 换成影子、
+// history 截到切点后,省掉冷 prefill 整段历史。<1h 不动(全量蹭服务端热缓存)。
+//
+// 缓存失效只看"距上次请求多久"(服务端、与重启无关),所以重启后首条消息和挂机回来走同一逻辑。
+// 幂等守卫 cp != m.summary 防重复套用(扛清理失败 / 崩溃 / 连续触发)。显示区(m.chatContent)仍全量,
+// 只截发给模型的 history(与压缩行为一致)。
+func (m *model) applyStaleShadow() {
+	if m.session == nil || len(m.history) == 0 {
+		return
+	}
+	t, ok := m.session.PrefixSnapshotTime()
+	if !ok || time.Since(t) <= cacheWarmWindow {
+		return // 没发过请求 / 缓存还热 → 用全量(命中热缓存更快)
+	}
+	cp, cut := m.session.LoadShadow()
+	if cp == "" || cp == m.summary || cut <= 0 || cut > len(m.history) {
+		return
+	}
+	m.summary = cp
+	m.history = append([]agent.ChatMessage(nil), m.history[cut:]...)
+	_ = m.session.SaveSummary(cp)
+	_ = m.session.SaveGob("history.gob", m.history)
+	m.session.ClearShadow()
+}
+
 func (m model) submitUserInput(input string) (model, tea.Cmd) {
 	input = strings.TrimSpace(input)
 	if input == "" && len(m.attachedImagePaths) == 0 {
@@ -880,6 +938,17 @@ func (m model) submitUserInput(input string) (model, tea.Cmd) {
 	if m.streaming {
 		return m, nil
 	}
+	// 压缩前台期间(手动/自动):排队而非丢弃,压缩完成后由 popQueuedInput 自动发出。
+	// 仍不开新 stream → 同样杜绝与压缩截断 history 的竞态(安全=拒绝式,但不丢字)。
+	// 终端 Enter 已在键处理处排队;这里兜 web 等其它入口。
+	if m.compactingFG {
+		m.queuedInput = append(m.queuedInput, input)
+		return m, nil
+	}
+
+	// 距上次请求 > 1h → 缓存大概率已凉,套用会话中预存的影子 checkpoint,缩小这轮的冷 prefill。
+	// 重启后首条消息与挂机回来共用此逻辑(统一在"发新一轮"判断,不在启动时)。
+	m.applyStaleShadow()
 
 	userMsg := m.buildUserMessage(input)
 	m.appendChat("You", input)
@@ -2061,8 +2130,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 		case "enter":
-			if m.streaming {
-				// 流式进行中:不打断,把这条排队,本轮结束后自动发送(见 queuedInput / StreamDoneMsg)。
+			if m.streaming || m.compactingFG {
+				// 流式中 / 压缩中:不打断,把这条排队,本轮(或压缩)结束后自动发送
+				// (见 queuedInput / StreamDoneMsg / compressionResultMsg)。压缩期间排队同样杜绝
+				// "新开 stream 与压缩截断 history 抢同一段"的竞态——安全和拒绝式一样,但不丢字、不硬挡。
 				// 只排文本;此刻挂着的图片留在 attachedImagePaths,由下一次真正提交时一并消费。
 				q := strings.TrimSpace(m.input.Value())
 				if q == "" {
@@ -2232,7 +2303,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// AskUser 的红色提示在闪烁时也需要持续 tick 驱动重渲染。
 		var c tea.Cmd
 		m.spinner, c = m.spinner.Update(msg)
-		if m.thinking || (m.askPending && m.askWarn) {
+		if m.thinking || m.compactingFG || (m.askPending && m.askWarn) {
 			cmds = append(cmds, c)
 		}
 		// thinking 状态下需要重渲染让 spinner 帧切换可见
@@ -2412,35 +2483,50 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// 显示区按字节预算自动裁剪 (chatLog.Append/Open 内部已调 trim),
 		// 这里无需额外动作 — 旧的 trimDisplayTurns 按"10 轮"裁的逻辑已被 chatLog 取代。
 
-		// 检查是否需要触发会话压缩：估算 token 数接近窗口的 70% 时触发。
+		// 检查是否需要触发会话压缩：估算 token 数接近窗口的 compactTriggerPct(80%)时触发。
 		ctxWin := m.models.Pro.ContextWindow
 		if ctxWin <= 0 {
 			ctxWin = 65536
 		}
-		if m.session != nil && m.models.Pro.Model != "" && !m.compacting && m.lastPromptTokens() >= ctxWin*70/100 {
-			// 拷贝当前 history 快照,异步执行压缩
-			snapshot := make([]agent.ChatMessage, len(m.history))
-			copy(snapshot, m.history)
-			// 上次实际发送的 model + system + tools(刚结束的这轮已写入快照),复刻它命中热缓存。
-			_, lastModel, lastSys, lastTools := m.session.LoadPrefixSnapshot()
-			entry := m.entryForModel(lastModel)
+		if m.session != nil && m.models.Pro.Model != "" && !m.compacting && m.lastPromptTokens() >= ctxWin*compactTriggerPct/100 {
 			m.compacting = true
-			return m, func() tea.Msg {
-				summary, cutIdx, compressedTurns, err := agent.RunCompression(lastSys, lastTools, snapshot, entry, ctxWin)
-				return compressionResultMsg{
-					summary:         summary,
-					cutIdx:          cutIdx,
-					compressedTurns: compressedTurns,
-					err:             err,
+			m.compactingFG = true // 前台阻塞:同手动 /compact,footer 转 spinner + 期间挡输入。子 agent 走 runSubAgent 不经此处,天然例外。
+			// 前台阻塞 + spinner;排队输入推迟到 compressionResultMsg(压缩完成后)再发。
+			return m, tea.Batch(m.compactCmd(false), m.spinner.Tick)
+		}
+
+		// 影子热压:上下文跨过 shadowPoints(30/45/60%)某档时,后台预算一份 checkpoint+cut 存盘
+		// (不改实时态、不阻塞用户)。仅供 >1h 冷重启用,省冷 prefill 全量历史;新覆盖旧;实时压缩落地会清掉它。
+		// 不用 20% 起步:keepTarget 也是 20%,那点 history < keepTarget 必被 RunCompression 拒(白跑)。
+		var shadowCmd tea.Cmd
+		if m.session != nil && m.models.Pro.Model != "" && !m.compacting && !m.shadowing && ctxWin > 0 {
+			// 取"已达到的最高未做档位"一次触发(pct 一跳跨过多档时不逐格补,直接打最高那档)。
+			pct := m.lastPromptTokens() * 100 / ctxWin
+			next := 0
+			for _, p := range shadowPoints {
+				if p > m.shadowDonePct && p <= pct {
+					next = p
+				}
+			}
+			if next > 0 {
+				snapshot := append([]agent.ChatMessage(nil), m.history...)
+				_, lastModel, lastSys, lastTools := m.session.LoadPrefixSnapshot()
+				entry := m.entryForModel(lastModel)
+				gen := m.compactGen
+				m.shadowDonePct = next
+				m.shadowing = true
+				shadowCmd = func() tea.Msg {
+					cp, cut, _, err := agent.RunCompression(lastSys, lastTools, snapshot, entry, ctxWin)
+					return shadowResultMsg{checkpoint: cp, cut: cut, gen: gen, err: err}
 				}
 			}
 		}
 
-		// 没触发压缩:有排队输入就发下一条(压缩分支优先,排队留到压缩完成后再发,见 compressionResultMsg)。
+		// 没触发实时压缩:有排队输入就发下一条;影子 Cmd(若有)并行后台跑,不阻塞用户。
 		if next, qcmd, ok := m.popQueuedInput(); ok {
-			return next, qcmd
+			return next, tea.Batch(shadowCmd, qcmd)
 		}
-		return m, nil
+		return m, shadowCmd
 
 	case agent.StreamErrMsg:
 		if m.streamCh == nil {
@@ -2500,6 +2586,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case compressionResultMsg:
 		m.compacting = false
+		m.compactingFG = false // 解除前台阻塞(成功/失败都解,spinner 随之停、输入恢复)
 		if msg.err != nil {
 			// 后台自动触发(70%/重启/空闲)失败静默 —— 不往聊天区打扰用户,下次触发会重试。
 			// 但 /compact 是用户主动发起的,压不动(历史太小/轮数不足)要明确告知,否则像没反应。
@@ -2540,6 +2627,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		_ = m.session.SaveSummary(msg.summary)
+		// 实时压缩落地:实时态(summary + 截断 history)已是更新更全的 checkpoint+tail,影子作废。
+		// 清掉影子、代数 +1(丢弃期间在飞的过期影子结果)、影子档位归零(history 重新长起再积累)。
+		m.compactGen++
+		m.shadowDonePct = 0
+		m.session.ClearShadow()
 		// 压缩后 history 已截断,写回 gob 保持下轮启动一致性
 		if m.session != nil {
 			_ = m.session.SaveGob("history.gob", m.history)
@@ -2560,6 +2652,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// 压缩完成,现在在更小的上下文上发出排队的下一条(StreamDoneMsg 把它推迟到了这里)。
 		if next, qcmd, ok := m.popQueuedInput(); ok {
 			return next, qcmd
+		}
+		return m, nil
+
+	case shadowResultMsg:
+		// 影子热压回来:只存盘、绝不动实时态(m.history/m.summary/system prompt 都不碰)。
+		m.shadowing = false
+		// 失败,或期间发生过实时压缩(gen 变了 → 影子 cut 已对不上、且实时态已更优)→ 丢弃不存。
+		if msg.err != nil || msg.gen != m.compactGen {
+			return m, nil
+		}
+		// cut 落在当前 history 内(history 只追加未截断时恒成立;防御性再判)→ 存为影子。
+		if msg.cut > 0 && msg.cut <= len(m.history) && m.session != nil {
+			m.session.SaveShadow(msg.checkpoint, msg.cut)
 		}
 		return m, nil
 	}
@@ -3211,9 +3316,26 @@ func lockedModelMsg(role string) string {
 	return fmt.Sprintf(T("model.locked"), role)
 }
 
+// compactCmd 构造一次"压缩 history → checkpoint"的后台 Cmd —— 手动 /compact 与自动 80% 触发共用。
+// 拍 history 快照、复刻上次实际发送的 model/system/tools(命中热缓存);manual 供结果处理区分
+// (失败时是否提示用户)。调用方负责置 m.compacting/m.compactingFG 与启动 spinner。
+func (m model) compactCmd(manual bool) tea.Cmd {
+	ctxWin := m.models.Pro.ContextWindow
+	if ctxWin <= 0 {
+		ctxWin = 65536
+	}
+	snapshot := append([]agent.ChatMessage(nil), m.history...)
+	_, lastModel, lastSys, lastTools := m.session.LoadPrefixSnapshot()
+	entry := m.entryForModel(lastModel)
+	return func() tea.Msg {
+		summary, cutIdx, turns, err := agent.RunCompression(lastSys, lastTools, snapshot, entry, ctxWin)
+		return compressionResultMsg{summary: summary, cutIdx: cutIdx, compressedTurns: turns, err: err, manual: manual}
+	}
+}
+
 // startManualCompaction 处理 /compact:手动触发会话压缩,仍按 context_window × 20% 保留尾部。
-// 与 70% 自动触发(StreamDoneMsg 里)走同一套 runCompression + compressionResultMsg 流程,
-// 区别只在于不看 token 阈值——用户敲了就压。压不动(历史太小)由 runCompression 返回 err,
+// 与自动 80% 触发(StreamDoneMsg 里)走同一套 compactCmd + compressionResultMsg 流程,
+// 区别只在于不看 token 阈值——用户敲了就压。压不动(历史太小)由 RunCompression 返回 err,
 // 经 manual 标记在结果处理处反馈给用户。
 func (m *model) startManualCompaction() tea.Cmd {
 	if m.session == nil || m.models.Pro.Model == "" {
@@ -3224,28 +3346,11 @@ func (m *model) startManualCompaction() tea.Cmd {
 		m.appendChat("System", "压缩正在进行中,请稍候")
 		return nil
 	}
-	ctxWin := m.models.Pro.ContextWindow
-	if ctxWin <= 0 {
-		ctxWin = 65536
-	}
-	// 拷贝 history 快照,异步执行(同 70% 触发逻辑)。
-	snapshot := make([]agent.ChatMessage, len(m.history))
-	copy(snapshot, m.history)
-	// 复刻上次实际发送的 model + system + tools,命中热缓存。
-	_, lastModel, lastSys, lastTools := m.session.LoadPrefixSnapshot()
-	entry := m.entryForModel(lastModel)
 	m.compacting = true
+	m.compactingFG = true // 前台阻塞:footer 转 spinner、期间挡输入(compressionResultMsg 里清)
 	m.appendChat("System", "正在压缩会话历史…")
-	return func() tea.Msg {
-		summary, cutIdx, compressedTurns, err := agent.RunCompression(lastSys, lastTools, snapshot, entry, ctxWin)
-		return compressionResultMsg{
-			summary:         summary,
-			cutIdx:          cutIdx,
-			compressedTurns: compressedTurns,
-			err:             err,
-			manual:          true,
-		}
-	}
+	// 启动 spinner tick,让 footer 的「压缩中…」动起来(TickMsg 处理处会在 compactingFG 时续 tick)。
+	return tea.Batch(m.compactCmd(true), m.spinner.Tick)
 }
 
 // === Skill 辅助 ===

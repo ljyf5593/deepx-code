@@ -85,6 +85,9 @@ func (m *model) loadCurrentConversation() {
 	m.plan = nil
 	m.planKind = ""
 	m.pendingUserText = ""
+	// 切会话:影子档位归零;代数 +1 让另一会话在飞的影子结果 gen 失配被丢弃(不串台存错会话)。
+	m.shadowDonePct = 0
+	m.compactGen++
 	m.chatContent.Reset()
 	if m.session != nil {
 		m.workingMode = agent.NormalizeWorkingMode(m.session.LoadWorkingMode()) // 切会话同步工作模式

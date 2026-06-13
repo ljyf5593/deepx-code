@@ -137,7 +137,7 @@ func runSubAgent(ctx context.Context, in subAgentInput) subAgentResult {
 		content, reasoning, toolCalls, _, _, err := streamOnce(
 			ctx,
 			in.Entry.APIKey, in.Entry.BaseURL, in.Entry.Model,
-			convo, in.Entry.MaxTokens, toolSpecs,
+			convo, clampMaxTokens(in.Entry.MaxTokens, in.Entry.ContextWindow, convo), toolSpecs,
 			in.Entry.ReasoningEffort, in.Entry.Thinking,
 			silent,
 		)
