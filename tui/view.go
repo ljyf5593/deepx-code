@@ -486,9 +486,9 @@ func (m model) queuedDisplayLines(width int) []string {
 
 // statusFooterLine 渲染输入框正上方那一行活动状态——把"在跑还是结束了"放到用户注意力
 // 所在处(主列底部),而不是只藏在右侧状态栏。
-//   - 运行中:spinner(thinking/tool 时转)/状态图标 + 状态词 + 实时耗时 + 当前工具,右侧贴 "Esc 中断"。
+//   - 运行中:spinner(thinking/tool 时转)/状态图标 + 状态词 + 实时耗时 + 当前工具("Esc 中断"不在这儿,输入框 placeholder 已有)。
 //   - 空闲:一个暗色 "● 就绪",和运行态形成明显对比。
-func (m model) statusFooterLine(width int) string {
+func (m model) statusFooterLine(_ int) string {
 	dim := lipgloss.NewStyle().Foreground(subtleColor).Render
 	// 压缩前台期间(手动/自动):转 spinner +「压缩中…」;输入不丢,排队待压缩后自动发。
 	if m.compactingFG {
@@ -526,12 +526,8 @@ func (m model) statusFooterLine(width int) string {
 	if m.activeTool != "" {
 		left += dim(" · " + m.activeTool)
 	}
-	hint := dim(T("footer.interrupt"))
-	gap := width - ansi.StringWidth(ansi.Strip(left)) - ansi.StringWidth(ansi.Strip(hint))
-	if gap < 1 {
-		return left // 太窄,中断提示让位,左侧由 normalizeFrame 截断
-	}
-	return left + strings.Repeat(" ", gap) + hint
+	// 不再右贴 "Esc 中断" —— 输入框 placeholder(misc.input_placeholder)已含,避免重复。
+	return left
 }
 
 func statusIcon(s string) string {
