@@ -2941,6 +2941,8 @@ func (m *model) handleSlashCommand(input string) tea.Cmd {
 		m.undoLastTurn()
 	case "/help":
 		m.appendChat("assistant", T("help.body"))
+	case "/exit":
+		return tea.Quit // 优雅退出:会话状态每轮已落盘,直接退即可
 	default:
 		m.appendChat("assistant", fmt.Sprintf(T("mode.unknown_cmd"), cmd))
 	}

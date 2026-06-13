@@ -285,6 +285,10 @@ var translations = map[string]map[Lang]string{
 		LangZH: "帮助",
 		LangEN: "Help",
 	},
+	"cmd.exit.desc": {
+		LangZH: "退出 deepx",
+		LangEN: "Quit deepx",
+	},
 
 	// === /help 输出 ===
 	"help.body": {
@@ -307,7 +311,8 @@ var translations = map[string]map[Lang]string{
 			"- `/sandbox` — 沙箱模式:`off`(关闭)/ `native`(OS 隔离,默认)/ `docker`(容器隔离)\n" +
 			"- `/working-mode` — 工作模式:`karpathy`(务实)/ `openspec`(规格驱动)/ `superpowers`(全流程严谨),默认 karpathy\n" +
 			"- `/undo` — 撤销上一轮对话(原输入回填输入框)\n" +
-			"- `/help` — 帮助\n\n" +
+			"- `/help` — 帮助\n" +
+			"- `/exit` — 退出 deepx\n\n" +
 			"**输入**\n\n" +
 			"- `@` — 引用文件(弹出文件选择器,选中后插入路径,模型按需读取)\n\n" +
 			"**快捷键**\n\n" +
@@ -335,7 +340,8 @@ var translations = map[string]map[Lang]string{
 			"- `/sandbox` — Sandbox mode: `off` / `native` (OS isolation, default) / `docker` (container isolation)\n" +
 			"- `/working-mode` — Working mode: `karpathy` (pragmatic) / `openspec` (spec-driven) / `superpowers` (rigorous), default karpathy\n" +
 			"- `/undo` — Undo the last exchange (restores your input)\n" +
-			"- `/help` — Help\n\n" +
+			"- `/help` — Help\n" +
+			"- `/exit` — Quit deepx\n\n" +
 			"**Input**\n\n" +
 			"- `@` — Reference a file (opens a picker; inserts the path for the model to read)\n\n" +
 			"**Keybindings**\n\n" +

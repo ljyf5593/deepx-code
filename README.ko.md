@@ -243,6 +243,7 @@ CreatePlan
 | `/mcp-list` `/mcp-add` `/mcp-delete` | MCP 서버 관리                       |
 | `/skills` `/config` `/mode`          | skill 목록 / key 재설정 / 모드 표시 |
 | `/help`                              | 도움말                              |
+| `/exit`                              | deepx 종료                          |
 
 ## 🛡️ 검토 모드
 

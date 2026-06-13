@@ -248,6 +248,7 @@ CreatePlan
 | `/mcp-list` `/mcp-add` `/mcp-delete` | 管理 MCP server                                                                                                                                                                                                                                                                                              |
 | `/skills` `/config` `/mode`          | 列出 skill / 重配 key / 查看模式                                                                                                                                                                                                                                                                             |
 | `/help`                              | 帮助                                                                                                                                                                                                                                                                                                         |
+| `/exit`                              | 退出 deepx                                                                                                                                                                                                                                                                                                   |
 
 ## 🛡️ 审核模式
 

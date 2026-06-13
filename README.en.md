@@ -243,6 +243,7 @@ A built-in symbol-graph engine lets the model do symbol-level navigation + call-
 | `/mcp-list` `/mcp-add` `/mcp-delete` | manage MCP servers                  |
 | `/skills` `/config` `/mode`          | list skills / reconfigure key / show mode |
 | `/help`                              | help                                |
+| `/exit`                              | quit deepx                          |
 
 ## 🛡️ Review Modes
 
