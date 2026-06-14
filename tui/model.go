@@ -1025,24 +1025,21 @@ func (m model) Init() tea.Cmd {
 	}
 	// 视觉能力探测:每次启动对各模型重探一次(见 vision.go),结果经 visionCapMsg 回灌。
 	cmds = append(cmds, visionProbeCmds(m.models)...)
-	// 不再强制注入伪 ModeReportMsg 切 grapheme —— bubbletea 启动会自己向终端查询 mode 2027,
-	// 终端真实应答经 applyUnicodeCoreReport 校正显示宽度口径,让 deepx 与终端一致(issue #113)。
+	if cmd := ForceGraphemeCmd(); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
 	// 启动即把控制态与已恢复的历史推进 hub 快照,晚连接的浏览器据此与 TUI 对齐。
 	m.broadcastControlState()
 	m.broadcastSessionLoaded()
 	return tea.Batch(cmds...)
 }
 
-// applyUnicodeCoreReport 据终端对 mode 2027(Unicode-core)的真实应答校正显示宽度口径。
-// 与 bubbletea cellbuf 的判定保持同口径(其 tea.go 内部:Set/Reset/PermanentlySet 才启用 grapheme),
-// 否则 deepx 自有排版与 textarea 渲染口径不一致,在不支持 2027 的终端会让输入框插入宽字符后
-// 光标后内容重复(issue #113)。NotRecognized / PermanentlyReset 视为不支持,退回 wcwidth。
-func applyUnicodeCoreReport(value ansi.ModeSetting) {
-	switch value {
-	case ansi.ModeSet, ansi.ModeReset, ansi.ModePermanentlySet:
-		graphemeWidthMode = true
-	default:
-		graphemeWidthMode = false
+func ForceGraphemeCmd() tea.Cmd {
+	if !graphemeWidthMode {
+		return nil
+	}
+	return func() tea.Msg {
+		return tea.ModeReportMsg{Mode: ansi.ModeUnicodeCore, Value: ansi.ModeSet}
 	}
 }
 
@@ -1056,15 +1053,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	switch msg := msg.(type) {
-
-	case tea.ModeReportMsg:
-		// 终端对 mode 2027(Unicode-core)的真实应答。据此把显示宽度口径校正到与终端一致,
-		// 修输入框插入宽字符后光标后内容重复的问题(issue #113)。其它 mode(如 2026 同步输出)
-		// 由 bubbletea 内部处理,这里只关心 Unicode-core。
-		if msg.Mode == ansi.ModeUnicodeCore {
-			applyUnicodeCoreReport(msg.Value)
-		}
-		return m, nil
 
 	case webInputMsg:
 		// 浏览器提交的输入,走和终端 Enter 完全相同的提交逻辑。

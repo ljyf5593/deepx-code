@@ -22,8 +22,6 @@ func TestDetectGraphemeMode(t *testing.T) {
 		{"WindowsTerminal → grapheme", map[string]string{"WT_SESSION": "some-guid"}, true},
 		{"GNOME/VTE → grapheme", map[string]string{"VTE_VERSION": "7200"}, true},
 		{"Konsole → grapheme", map[string]string{"KONSOLE_VERSION": "220400"}, true},
-		// conhost / 传统 PowerShell:无任何特征 env → 默认 wcwidth(issue #113)。
-		{"plain(conhost/PowerShell) → wcwidth", map[string]string{}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
