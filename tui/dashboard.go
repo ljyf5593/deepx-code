@@ -4,7 +4,6 @@ import (
 	"deepx/agent"
 	"fmt"
 	"os"
-	"runtime"
 	"strings"
 	"time"
 
@@ -38,14 +37,13 @@ func padLinesToWidth(content string, w int) string {
 	return strings.Join(lines, "\n")
 }
 
+// graphemeWidthMode 决定显示宽度按 grapheme / Unicode-core(DEC mode 2027)还是 wcwidth 口径算。
+// detectGraphemeMode() 只是初始猜测;真正口径由终端对 mode 2027 的真实应答(ModeReportMsg)
+// 在运行时校正(见 model.go 的 applyUnicodeCoreReport)。deepx 自有排版(分割线/横幅等,经
+// lineDisplayWidth)和 bubbletea cellbuf(textarea 渲染)都跟着终端真实能力走 —— 否则在不支持
+// 2027 的终端(Windows conhost / 传统 PowerShell)强行按 grapheme 算,会与终端实际渲染错位,
+// 表现为输入框在 ASCII 间插入宽字符时光标后内容重复(issue #113)。
 var graphemeWidthMode = detectGraphemeMode()
-
-var widthFunc = func() func(string) int {
-	if graphemeWidthMode {
-		return ansi.StringWidth
-	}
-	return ansi.StringWidthWc
-}()
 
 func detectGraphemeMode() bool {
 	switch os.Getenv("TERM_PROGRAM") {
@@ -61,14 +59,21 @@ func detectGraphemeMode() bool {
 	if os.Getenv("VTE_VERSION") != "" || os.Getenv("KONSOLE_VERSION") != "" {
 		return true
 	}
-	if runtime.GOOS == "windows" || os.Getenv("WT_SESSION") != "" {
+	// Windows Terminal:现代版支持 2027,先乐观猜 true,真实应答若不支持会下调到 wcwidth。
+	// 注意:不再因 runtime.GOOS == "windows" 一律默认 true —— conhost / 传统 PowerShell 不支持
+	// 2027,默认 false 走 wcwidth 才与终端实际渲染一致(issue #113)。
+	if os.Getenv("WT_SESSION") != "" {
 		return true
 	}
 	return false
 }
 
+// lineDisplayWidth 每次按当前 graphemeWidthMode 现取口径,运行时被 ModeReport 校正后即时生效。
 func lineDisplayWidth(s string) int {
-	return widthFunc(s)
+	if graphemeWidthMode {
+		return ansi.StringWidth(s)
+	}
+	return ansi.StringWidthWc(s)
 }
 
 // isWhitespaceLike 判断 rune 是否是已经能起字符边界作用的空白。
