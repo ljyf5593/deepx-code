@@ -2669,6 +2669,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	beforeVal := m.input.Value()
 	var inputCmd tea.Cmd
 	m.input, inputCmd = m.input.Update(msg)
 	cmds = append(cmds, inputCmd)
@@ -2680,9 +2681,38 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// 下一拍 600ms tick 仍按既有节奏 toggle,不 reset 时钟。
 	if _, ok := msg.(tea.KeyPressMsg); ok {
 		m.cursorBlinkOff = false
+		// issue #113:行中插入宽字符(把右边内容向右挤)会触发 ultraviolet 行 diff 双写,
+		// 在不能自愈的终端(Windows conhost/PowerShell)上残留半个旧字。强制整屏重绘绕开
+		// 有问题的增量 diff。仅在「输入值实际变化 且 宽字符行中编辑态」时触发:日常行尾打字、
+		// 纯光标移动都不满足,零影响。
+		if m.input.Value() != beforeVal && m.inputWideMidLine() {
+			cmds = append(cmds, tea.ClearScreen)
+		}
 	}
 
 	return m, tea.Batch(cmds...)
+}
+
+// inputWideMidLine 判断输入框是否处于会触发 ultraviolet 宽字符 diff 双写的状态:
+// 当前行含宽字符,且光标右边同一行还有内容(即行中编辑,而非行尾追加)。
+// 这是 issue #113 残影的必要条件;满足时配合强制重绘规避。
+func (m model) inputWideMidLine() bool {
+	val := m.input.Value()
+	if val == "" {
+		return false
+	}
+	lines := strings.Split(val, "\n")
+	li := m.input.Line()
+	if li < 0 || li >= len(lines) {
+		return false
+	}
+	line := lines[li]
+	// 本行无宽字符(显示宽度 == rune 数)→ 不可能触发。
+	if ansi.StringWidthWc(line) <= len([]rune(line)) {
+		return false
+	}
+	// 光标右边同行还有内容(行尾追加不触发 bug)。
+	return m.input.Column() < len([]rune(line))
 }
 
 // syncFileMention 据当前输入值同步 @ 文件提及选择器状态:
