@@ -42,19 +42,46 @@ func (s Status) Token() string {
 }
 
 // 遍历时跳过的目录名(版本控制 / 依赖 / 构建产物 / 缓存 / deepx 自身数据)。
-// 注意:按目录"名"匹配,只列不易和源码目录重名的;以 "." 开头的目录在遍历时统一跳过,不必在此重复列。
+// 注意:1) 按目录"名"匹配,只列不易和源码目录重名的;以 "." 开头的目录统一跳过,不必在此重复列。
+//  2. **键必须全小写** —— shouldSkipDir 用 strings.ToLower(name) 查找以做到大小写不敏感(issue #115)。
 var skipDirs = map[string]bool{
 	".git": true, ".hg": true, ".svn": true,
 	"node_modules": true, "vendor": true, ".deepx": true,
 	"dist": true, "build": true, "target": true, ".next": true,
 	// 各语言依赖 / 缓存 / 构建产物
-	"bower_components": true, "Pods": true, "__pycache__": true,
+	"bower_components": true, "pods": true, "__pycache__": true,
 	"venv": true, "site-packages": true, ".nuxt": true,
 	"out": true, "obj": true, "coverage": true, "__snapshots__": true,
 }
 
+// shouldSkipDir 判断遍历时是否跳过该目录:命中 skipDirs(**大小写不敏感**)或以 "." 开头。
+// 大小写不敏感是关键(issue #115):Windows/macOS 文件系统大小写不敏感,目录可能叫 Vendor /
+// Node_Modules / VENDOR 等;若按原大小写精确匹配,这些依赖目录会漏跳被索引,大仓直接 OOM。
+func shouldSkipDir(name string) bool {
+	return skipDirs[strings.ToLower(name)] || strings.HasPrefix(name, ".")
+}
+
 // 单文件大小上限:超过视为生成 / 压缩产物,跳过,避免拖慢索引。
 const maxFileSize = 1 << 20 // 1 MiB
+
+// 单行字节上限(issue #115):任一行超过即视为压缩 / 打包 / 生成 / 数据文件,解析前跳过。
+// tree-sitter 的 GLR 在这类超长行上会内存爆炸,且其超时杀不掉已在 native 解析的 goroutine
+// (遗弃的 runaway 会持续吃内存直到 OOM)→ 只能从源头不喂这类文件。用 var 便于测试调小。
+var maxLineBytes = 40 << 10 // 40 KiB
+
+// hasOverlongLine 报告 src 是否含超过 max 字节的行(O(n) 扫一遍,不分配)。
+func hasOverlongLine(src []byte, max int) bool {
+	start := 0
+	for i, b := range src {
+		if b == '\n' {
+			if i-start > max {
+				return true
+			}
+			start = i + 1
+		}
+	}
+	return len(src)-start > max
+}
 
 // 整次构建的扫描预算:任一触顶即停,图谱标记为降级(StatusDegraded)。
 // 这是与"根目录是什么"无关的硬兜底 —— 即使 gate 漏判、或撞上病态大仓,
@@ -64,6 +91,16 @@ var (
 	maxIndexFiles    = 50000            // 被解析的源文件数上限
 	maxIndexBytes    = int64(512 << 20) // 累计读取字节上限(512 MiB)
 	maxIndexDuration = 60 * time.Second // 单次遍历耗时上限
+)
+
+// 精确 go/types pass 的体量门控(issue #115):go/packages.Load("./...") 带 NeedSyntax|
+// NeedTypesInfo 会把整个 module + 依赖树的语法树/类型信息一次性全 load 进内存,无内置上限,
+// 大项目下可吃几十 GB 直接 OOM。快图有 512MiB 预算约束,精确 pass 也必须有对应的体量上限:
+// 模块自身 Go 源码超过任一阈值,就**跳过精确 pass**、保留已建好的有界快图(Go 调用边退化为
+// 语法近似,功能可用)。用 var 便于测试调小。
+var (
+	maxPreciseGoFiles = 2000            // 模块内被精确解析的 .go 文件数上限
+	maxPreciseGoBytes = int64(32 << 20) // 模块内 .go 源码总字节上限(32 MiB)
 )
 
 // projectMarkers:出现在根目录顶层即认为"这是一个项目根",可放心自动预热。
@@ -156,9 +193,7 @@ type Index struct {
 
 	gPrecise       bool   // 当前 ix.g 是否已是精确图
 	goSig          string // ix.g 精确图对应的 Go 文件签名
-	cachedPrecise  []Edge // 上次算出的精确 Go 调用边(按 cachedSig 缓存)
-	cachedSig      string
-	preciseRunning bool // 后台精确解析是否在跑(避免并发重复)
+	preciseRunning bool   // 后台精确解析是否在跑(避免并发重复)
 
 	rebuildMu    sync.Mutex  // 保护 rebuildTimer
 	rebuildTimer *time.Timer // Invalidate 后的防抖重建定时器(连续编辑只在静默后重建一次)
@@ -194,8 +229,8 @@ func NewIndex(root string) *Index {
 }
 
 // Disabled 报告图谱是否因危险根被禁用;Reason 返回禁用 / 不自动预热的原因。
-func (ix *Index) Disabled() bool  { return ix.forbidden }
-func (ix *Index) Reason() string  { return ix.reason }
+func (ix *Index) Disabled() bool { return ix.forbidden }
+func (ix *Index) Reason() string { return ix.reason }
 
 // Prewarm 后台预热:开机只建"快图"(语法层,便宜),不阻塞调用方。
 // 刻意不在此跑精确解析(go/packages 较重、可能联网)—— 那留到模型真正调用 CodeGraph 时
@@ -215,7 +250,7 @@ func (ix *Index) Prewarm() {
 	go func() {
 		ix.mu.Lock()
 		if ix.g == nil {
-			g, degraded, err := ix.assemble(nil, false)
+			g, degraded, err := buildViaSubprocess(ix.root, "quick")
 			if err != nil {
 				ix.mu.Unlock()
 				ix.setStatus(StatusIdle)
@@ -245,7 +280,7 @@ func (ix *Index) Graph() (*Graph, error) {
 		ix.maybePrecise()
 		return g, nil
 	}
-	g, degraded, err := ix.assemble(nil, false) // 快图:语法近似
+	g, degraded, err := buildViaSubprocess(ix.root, "quick") // 快图:语法近似
 	if err != nil {
 		ix.mu.Unlock()
 		ix.setStatus(StatusIdle)
@@ -267,7 +302,7 @@ func (ix *Index) Reindex() (int, error) {
 		return 0, fmt.Errorf("代码图谱已禁用:%s", ix.reason)
 	}
 	ix.mu.Lock()
-	g, degraded, err := ix.assemble(nil, false)
+	g, degraded, err := buildViaSubprocess(ix.root, "quick")
 	if err != nil {
 		ix.mu.Unlock()
 		return 0, err
@@ -319,7 +354,7 @@ func (ix *Index) scheduleRebuild() {
 			ix.setStatus(StatusReady)
 			return
 		}
-		g, degraded, err := ix.assemble(nil, false)
+		g, degraded, err := buildViaSubprocess(ix.root, "quick")
 		if err != nil {
 			ix.mu.Unlock()
 			return // 建失败:保持"更新",留待下次编辑或查询再试
@@ -340,6 +375,11 @@ func (ix *Index) maybePrecise() {
 	if ix.forbidden {
 		return // 危险根:绝不跑 go/types(会扫整棵依赖树)
 	}
+	// 体量门控(issue #115):Go 源码过大就跳过精确 pass,避免 go/packages 把整棵依赖树
+	// load 进内存导致 OOM。保留已建好的有界快图即可。
+	if files, bytes := ix.goCorpusStats(); files == 0 || files > maxPreciseGoFiles || bytes > maxPreciseGoBytes {
+		return
+	}
 	sig := ix.goSignature()
 	if sig == "" {
 		return // 没有 Go 文件,免跑
@@ -350,29 +390,18 @@ func (ix *Index) maybePrecise() {
 		return
 	}
 	ix.preciseRunning = true
-	reuse := ix.cachedSig == sig && ix.cachedPrecise != nil
-	cached := ix.cachedPrecise
 	ix.mu.Unlock()
 
 	go func() {
-		edges, ok := cached, reuse
-		if !ok {
-			edges, ok = goPreciseCallEdges(ix.root) // 慢:类型检查依赖树
-		}
-		if ok {
-			if g2, _, err := ix.assemble(edges, true); err == nil {
-				ix.mu.Lock()
-				ix.g = g2
-				ix.gPrecise = true
-				ix.goSig = sig
-				ix.cachedPrecise = edges
-				ix.cachedSig = sig
-				ix.preciseRunning = false
-				ix.mu.Unlock()
-				return
-			}
-		}
+		// 精确解析(goPreciseCallEdges + 重新 assemble)整体在受内存限额的子进程里跑,
+		// 成功才原子换上精确图;失败 / 降级则保持当前快图。
+		g2, _, err := buildViaSubprocess(ix.root, "precise")
 		ix.mu.Lock()
+		if err == nil && g2 != nil {
+			ix.g = g2
+			ix.gPrecise = true
+			ix.goSig = sig
+		}
 		ix.preciseRunning = false
 		ix.mu.Unlock()
 	}()
@@ -399,7 +428,7 @@ func (ix *Index) assemble(preciseGoCalls []Edge, usePrecise bool) (_ *Graph, deg
 		}
 		name := d.Name()
 		if d.IsDir() {
-			if path != ix.root && (skipDirs[name] || strings.HasPrefix(name, ".")) {
+			if path != ix.root && shouldSkipDir(name) {
 				return filepath.SkipDir
 			}
 			return nil
@@ -418,6 +447,12 @@ func (ix *Index) assemble(preciseGoCalls []Edge, usePrecise bool) (_ *Graph, deg
 		}
 		files++
 		bytes += int64(len(src))
+		// 超长行 = 压缩 / 打包 / 生成 / 数据文件:tree-sitter 的 GLR 解析对这类输入会内存爆炸
+		// (issue #115),且其超时杀不掉已在 native 解析的 goroutine,遗弃的 runaway 会持续吃内存。
+		// 这类文件对代码图谱也几乎无价值 —— 解析前直接跳过,从源头不喂炸弹。
+		if hasOverlongLine(src, maxLineBytes) {
+			return nil
+		}
 		rel, relErr := filepath.Rel(ix.root, path)
 		if relErr != nil {
 			rel = path
@@ -460,6 +495,32 @@ func (ix *Index) assemble(preciseGoCalls []Edge, usePrecise bool) (_ *Graph, deg
 	return g, degraded, nil
 }
 
+// goCorpusStats 统计 workspace 内(跳过 skipDirs/隐藏目录)的 .go 文件数与总字节,只 stat 不读。
+// 用于精确 pass 的体量门控(issue #115)。skip 规则与 assemble/goSignature 一致,
+// 因此不数 vendor/依赖/.git,约等于「module 自身会被 ./... 精确解析的 Go 源码量」。
+func (ix *Index) goCorpusStats() (files int, bytes int64) {
+	_ = filepath.WalkDir(ix.root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			name := d.Name()
+			if path != ix.root && shouldSkipDir(name) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if strings.HasSuffix(path, ".go") {
+			if info, e := d.Info(); e == nil {
+				files++
+				bytes += info.Size()
+			}
+		}
+		return nil
+	})
+	return files, bytes
+}
+
 // goSignature 扫 workspace 里所有 .go 文件的大小+修改时间,拼成签名;Go 没变签名就不变。
 // 只 stat 不读内容,便宜。
 func (ix *Index) goSignature() string {
@@ -470,7 +531,7 @@ func (ix *Index) goSignature() string {
 		}
 		if d.IsDir() {
 			name := d.Name()
-			if path != ix.root && (skipDirs[name] || strings.HasPrefix(name, ".")) {
+			if path != ix.root && shouldSkipDir(name) {
 				return filepath.SkipDir
 			}
 			return nil
