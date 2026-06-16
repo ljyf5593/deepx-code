@@ -2,6 +2,7 @@ package main
 
 import (
 	"deepx/agent"
+	"deepx/codegraph"
 	"deepx/config"
 	"deepx/tools"
 	"deepx/tui"
@@ -26,6 +27,19 @@ func main() {
 
 	if len(os.Args) > 1 && (os.Args[1] == "--version" || os.Args[1] == "-v" || os.Args[1] == "version") {
 		fmt.Printf("deepx %s (commit %s, built %s)\n", version, commit, date)
+		return
+	}
+	// 隐藏子命令:代码图谱构建子进程(由 codegraph.buildViaSubprocess re-exec 自身触发)。
+	// 在受内存看门狗限额的本进程里建图、gob 写 stdout,超内存自杀——防 tree-sitter / go-types
+	// 失控分配拖垮主进程(issue #115)。必须在加载配置 / 起 TUI 之前拦掉。
+	if len(os.Args) > 2 && os.Args[1] == "__codegraph-build" {
+		mode := "quick"
+		if len(os.Args) > 3 {
+			mode = os.Args[3]
+		}
+		if err := codegraph.BuildAndEncode(os.Args[2], mode, os.Stdout); err != nil {
+			os.Exit(1)
+		}
 		return
 	}
 	if len(os.Args) > 1 && os.Args[1] == "upgrade" {

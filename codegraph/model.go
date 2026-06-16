@@ -89,7 +89,12 @@ type ParseResult struct {
 
 // Graph 是整个 workspace 的符号图谱。查询方法都只读,构建完后并发读安全。
 type Graph struct {
-	Symbols    []Symbol
+	Symbols []Symbol
+	// RawRefs / RawEdges 是原始引用 / 边列表(导出,供子进程建图后 gob 序列化回父进程;
+	// 父进程重放 add* 重建下方索引)。索引 map 未导出、gob 不传,靠重放还原。
+	RawRefs  []Ref
+	RawEdges []Edge
+
 	defByName  map[string][]int  // 符号名(非限定)→ Symbols 下标
 	refsByName map[string][]Ref  // 标识符名 → 引用点
 	calleeIdx  map[string][]Edge // 被调用短名 → 调用它的 call 边(查 callers)
@@ -122,10 +127,12 @@ func (g *Graph) addSymbol(s Symbol) {
 }
 
 func (g *Graph) addRef(r Ref) {
+	g.RawRefs = append(g.RawRefs, r)
 	g.refsByName[r.Name] = append(g.refsByName[r.Name], r)
 }
 
 func (g *Graph) addEdge(e Edge) {
+	g.RawEdges = append(g.RawEdges, e) // 原始边留底,供序列化重放
 	switch e.Kind {
 	case EdgeCall:
 		if e.ToQual == "" {

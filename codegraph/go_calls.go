@@ -1,6 +1,7 @@
 package codegraph
 
 import (
+	"context"
 	"go/ast"
 	"go/token"
 	"go/types"
@@ -16,7 +17,12 @@ import (
 // 调用方应退回语法层近似——绝不因为代码不可编译而漏掉调用边。
 func goPreciseCallEdges(root string) ([]Edge, bool) {
 	fset := token.NewFileSet()
+	// 超时兜底(issue #115):体量门控已在上游(maybePrecise)拦掉过大项目,这里再加一道
+	// 时间上限,防止 go list / 类型检查在病态依赖下长时间挂住。
+	loadCtx, cancel := context.WithTimeout(context.Background(), maxIndexDuration)
+	defer cancel()
 	cfg := &packages.Config{
+		Context: loadCtx,
 		Mode: packages.NeedName | packages.NeedFiles | packages.NeedCompiledGoFiles |
 			packages.NeedSyntax | packages.NeedTypes | packages.NeedTypesInfo | packages.NeedImports,
 		Dir:  root,
